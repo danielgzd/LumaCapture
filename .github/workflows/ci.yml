@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core behavior tests
+        run: scripts/test.sh
+      - name: Intel cross-compilation tests
+        run: scripts/test.sh --arch x86_64 --portable
+      - name: Universal application and self-test
+        run: scripts/build.sh --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LumaCapture-universal
+          path: |
+            dist/*.zip
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error

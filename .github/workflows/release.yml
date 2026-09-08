@@ -1,0 +1,20 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test and build Universal release
+        run: scripts/test.sh && scripts/test.sh --arch x86_64 --portable && scripts/build.sh --self-test --version "${GITHUB_REF_NAME#v}"
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.dmg dist/*.sha256 --verify-tag --generate-notes --title "LumaCapture ${GITHUB_REF_NAME#v}"
