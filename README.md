@@ -50,6 +50,12 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" scripts/build.sh
 
 Apple 公证需要开发者账户凭据，须在签名之后另行执行 `notarytool`；仓库不会保存证书或凭据。
 
+## 自动版本发布
+
+合并或推送影响源代码、测试、资源、构建脚本或 Actions 配置的变更到 `main` 后，CI 会先完成测试，再把最新版本的补丁号加一，例如 `0.1.0 → 0.1.1`，创建 Git 标签并触发 Universal 2 Release 构建。文档单独修改不会产生新版本。
+
+需要发布大版本或指定版本时，在 GitHub Actions 中手动运行 **CI**，在 `release_version` 输入完整版本号，例如 `1.0.0`。版本号必须符合 `主版本.次版本.补丁版本`，且不能与已有标签重复。
+
 ## 验证
 
 ```bash
