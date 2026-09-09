@@ -99,6 +99,13 @@ fi
 
 if [[ "$LUMA_ARCHIVE" == 1 ]]; then
   artifact_base="LumaCapture-$LUMA_VERSION-universal"
+  find "$LUMA_DIST" -maxdepth 1 \( \
+    -name 'LumaCapture-*-universal.zip' -o \
+    -name 'LumaCapture-*-universal.dmg' -o \
+    -name 'LumaCapture-*-universal.sha256' -o \
+    -name 'LumaCapture.app' -o \
+    -name '.DS_Store' \
+  \) -exec rm -rf {} +
   zip_path="$LUMA_DIST/$artifact_base.zip"
   # ditto replaces the archive; do not append to a stale ZIP.
   [[ ! -e "$zip_path" ]] || rm "$zip_path"
