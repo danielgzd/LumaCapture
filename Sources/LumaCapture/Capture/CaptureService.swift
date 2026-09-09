@@ -15,9 +15,15 @@ final class CaptureService: NSObject, ObservableObject {
 
     private var session: RecordingSession?
     private var isPreparingRecording = false
+    private var isFinalizingRecording = false
+    private var cachedContent: SCShareableContent?
+    private var cachedContentTime: TimeInterval = 0
+    private var cachedScreenLayout: [ScreenLayout] = []
+    private var contentRequest: (id: UUID, task: Task<SCShareableContent, Error>)?
 
     func refreshTargets() async {
         guard CapturePermissions.hasScreenRecordingAccess else {
+            cachedContent = nil
             displays = []
             windows = []
             errorMessage = CaptureError.screenPermissionRequired.localizedDescription
@@ -28,6 +34,7 @@ final class CaptureService: NSObject, ObservableObject {
             updateTargets(from: content)
             errorMessage = nil
         } catch {
+            cachedContent = nil
             displays = []
             windows = []
             errorMessage = usefulMessage(for: error)
@@ -37,13 +44,14 @@ final class CaptureService: NSObject, ObservableObject {
     func capture(target: CaptureTarget, region: CGRect?, showsCursor: Bool) async throws -> CGImage {
         do {
             try ensureScreenPermission()
-            let content = try await shareableContent()
+            let content = try await shareableContent(for: target)
             updateTargets(from: content)
             let prepared = try makeCapture(target: target, region: region, content: content, recording: false)
             prepared.configuration.showsCursor = showsCursor
             try Task.checkCancellation()
             let image = try await SCScreenshotManager.captureImage(contentFilter: prepared.filter,
                                                                   configuration: prepared.configuration)
+            try Task.checkCancellation()
             errorMessage = nil
             return image
         } catch {
@@ -54,7 +62,9 @@ final class CaptureService: NSObject, ObservableObject {
 
     func startRecording(target: CaptureTarget, region: CGRect?, options: RecordingOptions,
                         outputURL: URL) async throws {
-        guard !isPreparingRecording, session == nil else { throw CaptureError.recordingAlreadyActive }
+        guard !isPreparingRecording, !isFinalizingRecording, session == nil else {
+            throw CaptureError.recordingAlreadyActive
+        }
         isPreparingRecording = true
         defer { isPreparingRecording = false }
         do {
@@ -69,7 +79,7 @@ final class CaptureService: NSObject, ObservableObject {
                 guard AVCaptureDevice.default(for: .audio) != nil else { throw CaptureError.microphoneUnavailable }
             }
             try Task.checkCancellation()
-            let content = try await shareableContent()
+            let content = try await shareableContent(for: target)
             updateTargets(from: content)
             let prepared = try makeCapture(target: target, region: region, content: content, recording: true)
             let configuration = prepared.configuration
@@ -101,9 +111,22 @@ final class CaptureService: NSObject, ObservableObject {
             do {
                 try stream.addRecordingOutput(output)
                 try await withTaskCancellationHandler {
-                    try await stream.startCapture()
                     try Task.checkCancellation()
-                    try await waitForStart(pending)
+                    // Register the timeout before asking the WindowServer to
+                    // start. Awaiting startCapture() first would leave a hung
+                    // system completion outside the 20-second deadline.
+                    try await waitForStart(pending) {
+                        stream.startCapture { [weak self, weak pending] error in
+                            Task { @MainActor in
+                                guard let self, let pending else { return }
+                                if let error { self.fail(pending, with: error, stopStream: true) }
+                                else {
+                                    pending.streamStarted = true
+                                    self.publishRecordingStarted(pending)
+                                }
+                            }
+                        }
+                    }
                 } onCancel: { [weak self, weak pending] in
                     Task { @MainActor in
                         guard let self, let pending else { return }
@@ -125,12 +148,20 @@ final class CaptureService: NSObject, ObservableObject {
         guard active.didStart else { throw CaptureError.recordingStillStarting }
         guard !active.isStopping else { throw CaptureError.recordingAlreadyActive }
         active.isStopping = true
+        isFinalizingRecording = true
+        defer { isFinalizingRecording = false }
         do {
             // Stop capture also stops the recording output. Its completion only
             // stops the stream; recordingOutputDidFinishRecording confirms that
             // the MP4 container has finished writing to disk.
-            try await active.stream.stopCapture()
-            let url = try await waitForFinish(active)
+            let url = try await waitForFinish(active) {
+                active.stream.stopCapture { [weak self, weak active] error in
+                    Task { @MainActor in
+                        guard let self, let active, let error, active.finishResult == nil else { return }
+                        self.fail(active, with: error, stopStream: false)
+                    }
+                }
+            }
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
             guard let bytes = attributes[.size] as? NSNumber, bytes.int64Value > 0 else {
                 throw CaptureError.emptyRecording
@@ -150,8 +181,49 @@ final class CaptureService: NSObject, ObservableObject {
         }
     }
 
-    private func shareableContent() async throws -> SCShareableContent {
-        try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+    private func shareableContent(for target: CaptureTarget? = nil) async throws -> SCShareableContent {
+        // A refresh immediately followed by a capture should not enumerate every
+        // open window twice. Display geometry is stable across region selection;
+        // window cache hits additionally verify current bounds and visibility.
+        if let target, let cachedContent, canReuse(cachedContent, for: target) { return cachedContent }
+        if let request = contentRequest { return try await request.task.value }
+        let requestID = UUID()
+        let task = Task { try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) }
+        contentRequest = (requestID, task)
+        defer {
+            if contentRequest?.id == requestID { contentRequest = nil }
+        }
+        let content = try await task.value
+        cachedContent = content
+        cachedContentTime = ProcessInfo.processInfo.systemUptime
+        cachedScreenLayout = currentScreenLayout()
+        return content
+    }
+
+    private func canReuse(_ content: SCShareableContent, for target: CaptureTarget) -> Bool {
+        let age = ProcessInfo.processInfo.systemUptime - cachedContentTime
+        guard age >= 0, cachedScreenLayout == currentScreenLayout() else { return false }
+        if !target.isWindow {
+            return age < 30 && content.displays.contains { $0.displayID == target.displayID }
+        }
+        guard age < 2,
+              let window = content.windows.first(where: { $0.windowID == target.resolvedWindowID }),
+              let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, window.windowID) as? [[String: Any]],
+              let current = info.first,
+              current[kCGWindowIsOnscreen as String] as? Bool == true,
+              let bounds = current[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
+        return frame == window.frame
+    }
+
+    private struct ScreenLayout: Equatable {
+        let displayID: CGDirectDisplayID?
+        let frame: CGRect
+        let scale: CGFloat
+    }
+
+    private func currentScreenLayout() -> [ScreenLayout] {
+        NSScreen.screens.map { ScreenLayout(displayID: $0.captureDisplayID, frame: $0.frame, scale: $0.backingScaleFactor) }
     }
 
     private func ensureScreenPermission() throws {
@@ -160,6 +232,7 @@ final class CaptureService: NSObject, ObservableObject {
 
     private func updateTargets(from content: SCShareableContent) {
         displays = content.displays.sorted {
+            if $0.displayID == $1.displayID { return false }
             if $0.displayID == CGMainDisplayID() { return true }
             if $1.displayID == CGMainDisplayID() { return false }
             return $0.displayID < $1.displayID
@@ -188,8 +261,7 @@ final class CaptureService: NSObject, ObservableObject {
         var sourceSize: CGSize
         let configuration = SCStreamConfiguration()
         if target.isWindow {
-            let windowID = target.windowID ?? UInt32(target.id.replacingOccurrences(of: "window:", with: ""))
-            guard let window = content.windows.first(where: { $0.windowID == windowID && $0.isOnScreen }) else {
+            guard let window = content.windows.first(where: { $0.windowID == target.resolvedWindowID && $0.isOnScreen }) else {
                 throw CaptureError.targetUnavailable
             }
             guard region == nil else { throw CaptureError.invalidRegion }
@@ -207,11 +279,12 @@ final class CaptureService: NSObject, ObservableObject {
             let excluded = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
             filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
             // ScreenCaptureKit source rectangles are expressed in logical points.
-            // `SCDisplay.width/height` describe backing pixels on Retina displays,
-            // while the filter pairs its point-sized contentRect with pointPixelScale.
+            // Always use the filter's contentRect / pointPixelScale pair instead
+            // of inferring a point size from SCDisplay's nominal dimensions.
             sourceSize = filter.contentRect.size
             if let region {
-                let clipped = try CaptureGeometry.validatedRegion(region, displaySize: sourceSize)
+                let clipped = try CaptureGeometry.pixelAlignedRegion(region, displaySize: sourceSize,
+                                                                      scale: CGFloat(filter.pointPixelScale))
                 configuration.sourceRect = clipped
                 sourceSize = clipped.size
             }
@@ -230,7 +303,7 @@ final class CaptureService: NSObject, ObservableObject {
         return (filter, configuration)
     }
 
-    private func waitForStart(_ pending: RecordingSession) async throws {
+    private func waitForStart(_ pending: RecordingSession, begin: () -> Void) async throws {
         if let result = pending.startResult { return try result.get() }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             pending.startContinuation = continuation
@@ -239,10 +312,11 @@ final class CaptureService: NSObject, ObservableObject {
                 guard let self, let pending, pending.startResult == nil else { return }
                 self.fail(pending, with: CaptureError.recordingStartTimedOut, stopStream: true)
             }
+            begin()
         }
     }
 
-    private func waitForFinish(_ active: RecordingSession) async throws -> URL {
+    private func waitForFinish(_ active: RecordingSession, begin: () -> Void) async throws -> URL {
         if let result = active.finishResult { return try result.get() }
         return try await withCheckedThrowingContinuation { continuation in
             active.finishContinuation = continuation
@@ -251,15 +325,22 @@ final class CaptureService: NSObject, ObservableObject {
                 guard let self, let active, active.finishResult == nil else { return }
                 self.fail(active, with: CaptureError.recordingFinishTimedOut, stopStream: true)
             }
+            begin()
         }
     }
 
     fileprivate func recordingDidStart(_ output: SCRecordingOutput) {
         guard let active = session, active.output === output, active.startResult == nil else { return }
         active.didStart = true
+        active.startedAt = Date()
+        publishRecordingStarted(active)
+    }
+
+    private func publishRecordingStarted(_ active: RecordingSession) {
+        guard session === active, active.didStart, active.streamStarted, active.startResult == nil else { return }
         active.resolveStart(.success(()))
         isRecording = true
-        recordingStartedAt = Date()
+        recordingStartedAt = active.startedAt
     }
 
     fileprivate func recordingDidFinish(_ output: SCRecordingOutput) {
@@ -268,8 +349,16 @@ final class CaptureService: NSObject, ObservableObject {
             fail(active, with: CaptureError.emptyRecording, stopStream: true)
             return
         }
+        guard active.startResult != nil else {
+            fail(active, with: CaptureError.emptyRecording, stopStream: true)
+            return
+        }
         active.resolveFinish(.success(active.url))
         clear(active)
+        if !active.isStopping {
+            errorMessage = "录屏已由系统结束，文件位于：\(active.url.path)。请检查播放后再使用。"
+            requestCleanup(active)
+        }
     }
 
     fileprivate func recordingDidFail(_ output: SCRecordingOutput, error: Error) {
@@ -286,16 +375,18 @@ final class CaptureService: NSObject, ObservableObject {
         active.resolveStart(.failure(error))
         active.resolveFinish(.failure(error))
         if session === active {
-            if !(error is CancellationError) { errorMessage = usefulMessage(for: error) }
             clear(active)
+            if !(error is CancellationError) { errorMessage = usefulMessage(for: error) }
         }
-        if stopStream, !active.cleanupRequested {
-            active.cleanupRequested = true
-            Task { @MainActor in
-                do { try await active.stream.stopCapture() }
-                catch { /* Preserve the original failure; stopping a failed stream can also fail. */ }
-            }
-        }
+        if stopStream { requestCleanup(active) }
+    }
+
+    private func requestCleanup(_ active: RecordingSession) {
+        guard !active.cleanupRequested else { return }
+        active.cleanupRequested = true
+        // Keep the delegate alive until the stop callback without retaining a
+        // suspended Task or the entire session when the system has already failed.
+        active.stream.stopCapture { [proxy = active.proxy] _ in _ = proxy }
     }
 
     private func clear(_ active: RecordingSession) {
@@ -321,6 +412,8 @@ private final class RecordingSession {
     let output: SCRecordingOutput
     let proxy: RecordingDelegateProxy
     var didStart = false
+    var streamStarted = false
+    var startedAt: Date?
     var isStopping = false
     var cleanupRequested = false
     var startResult: Result<Void, Error>?
@@ -360,7 +453,7 @@ private final class RecordingSession {
 
 /// ScreenCaptureKit invokes delegates off the main thread. This proxy routes
 /// every state transition through the same actor used by the UI and continuations.
-private final class RecordingDelegateProxy: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
+private final class RecordingDelegateProxy: NSObject, @unchecked Sendable, SCRecordingOutputDelegate, SCStreamDelegate {
     weak var owner: CaptureService?
     init(owner: CaptureService) { self.owner = owner }
 

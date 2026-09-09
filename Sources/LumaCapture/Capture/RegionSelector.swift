@@ -9,23 +9,36 @@ enum RegionSelector {
 
     static func select(displayID: CGDirectDisplayID) async -> CGRect? {
         active?.cancel()
+        guard !Task.isCancelled else { return nil }
         guard let screen = NSScreen.screens.first(where: { $0.captureDisplayID == displayID }) else { return nil }
-        return await withCheckedContinuation { continuation in
-            let controller = RegionSelectionController(screen: screen) { result in
-                active = nil
-                continuation.resume(returning: result)
+        let requestID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: nil); return }
+                let controller = RegionSelectionController(id: requestID, screen: screen) { result in
+                    if active?.id == requestID { active = nil }
+                    continuation.resume(returning: result)
+                }
+                active = controller
+                controller.present()
             }
-            active = controller
-            controller.present()
+        } onCancel: {
+            Task { @MainActor in
+                if active?.id == requestID { active?.cancel() }
+            }
         }
     }
 }
 
 @MainActor
 private final class RegionSelectionController {
+    let id: UUID
     private let screen: NSScreen
     private let completion: (CGRect?) -> Void
     private var hasCompleted = false
+    private var keyMonitor: Any?
+    private var screenObserver: NSObjectProtocol?
+    private var deactivateObserver: NSObjectProtocol?
     private lazy var window: RegionSelectionWindow = {
         let window = RegionSelectionWindow(contentRect: screen.frame,
                                            styleMask: [.borderless], backing: .buffered,
@@ -34,6 +47,7 @@ private final class RegionSelectionController {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
+        window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.ignoresMouseEvents = false
         let view = RegionSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
@@ -42,13 +56,31 @@ private final class RegionSelectionController {
         return window
     }()
 
-    init(screen: NSScreen, completion: @escaping (CGRect?) -> Void) {
+    init(id: UUID, screen: NSScreen, completion: @escaping (CGRect?) -> Void) {
+        self.id = id
         self.screen = screen
         self.completion = completion
     }
 
     func present() {
         NSCursor.crosshair.push()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            self?.cancel()
+            return nil
+        }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            // The old screen's local coordinates are invalid after a resolution,
+            // arrangement or display-connection change. Never return a stale crop.
+            Task { @MainActor in self?.cancel() }
+        }
+        deactivateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.cancel() }
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(window.contentView)
@@ -60,14 +92,15 @@ private final class RegionSelectionController {
         guard !hasCompleted else { return }
         hasCompleted = true
         window.orderOut(nil)
+        window.close()
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
+        if let deactivateObserver { NotificationCenter.default.removeObserver(deactivateObserver); self.deactivateObserver = nil }
         NSCursor.pop()
         if let rect = windowLocalRect?.standardized,
            rect.width >= CaptureGeometry.minimumRegionSize,
            rect.height >= CaptureGeometry.minimumRegionSize {
-            let topLeft = CGRect(x: rect.minX,
-                                 y: screen.frame.height - rect.maxY,
-                                 width: rect.width,
-                                 height: rect.height)
+            let topLeft = CaptureGeometry.topLeftRegion(fromBottomLeft: rect, displayHeight: screen.frame.height)
             completion(topLeft)
         } else {
             completion(nil)
@@ -140,9 +173,16 @@ private final class RegionSelectionView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard start != nil else { return }
-        let result = selection
-        start = nil
+        guard let start else { return }
+        // The final mouse-up can be newer than the last coalesced drag event.
+        let result = CaptureGeometry.dragRect(from: start, to: convert(event.locationInWindow, from: nil), bounds: bounds)
+        self.start = nil
+        guard result.width >= CaptureGeometry.minimumRegionSize,
+              result.height >= CaptureGeometry.minimumRegionSize else {
+            selection = nil
+            needsDisplay = true
+            return
+        }
         onComplete?(result)
     }
 

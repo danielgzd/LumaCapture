@@ -40,6 +40,7 @@ struct EditorAnnotation {
     var width: CGFloat
     var text: String = ""
     var fontSize: CGFloat = 36
+    var strokePath: CGPath? = nil
     var bounds: CGRect {
         guard let first = points.first, let last = points.last else { return .zero }
         return CGRect(x: min(first.x, last.x), y: min(first.y, last.y),
@@ -93,16 +94,19 @@ enum EditorError: LocalizedError {
 enum EditorRenderer {
     /// All annotation coordinates use original-image pixels, with the origin at the upper left.
     /// Preview and exported files use this same renderer, including the exact opaque redaction.
-    static func render(image: CGImage, snapshot: EditorSnapshot) throws -> CGImage {
+    static func render(image: CGImage, snapshot: EditorSnapshot, maxPixelDimension: Int? = nil) throws -> CGImage {
         let crop = snapshot.cropBounds.integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
         guard crop.width >= 2, crop.height >= 2 else { throw EditorError.invalidCrop }
-        let width = Int(crop.width), height = Int(crop.height)
+        let scale = maxPixelDimension.map { min(1, CGFloat(max(1, $0)) / max(crop.width, crop.height)) } ?? 1
+        let width = max(1, Int((crop.width * scale).rounded()))
+        let height = max(1, Int((crop.height * scale).rounded()))
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw EditorError.renderFailed
         }
         context.interpolationQuality = .high
+        context.scaleBy(x: CGFloat(width) / crop.width, y: CGFloat(height) / crop.height)
         // CGContext is bottom-up here. Position the source so a top-left crop stays pixel exact.
         context.draw(image, in: CGRect(x: -crop.minX, y: crop.maxY - CGFloat(image.height),
                                       width: CGFloat(image.width), height: CGFloat(image.height)))
@@ -132,8 +136,11 @@ enum EditorRenderer {
                                                   width: annotation.width, height: annotation.width))
                 } else {
                     context.beginPath()
-                    context.move(to: start)
-                    for point in annotation.points.dropFirst() { context.addLine(to: point) }
+                    if let path = annotation.strokePath { context.addPath(path) }
+                    else {
+                        context.move(to: start)
+                        for point in annotation.points.dropFirst() { context.addLine(to: point) }
+                    }
                     context.strokePath()
                 }
             case .arrow:
@@ -186,6 +193,10 @@ enum EditorRenderer {
     }
 
     static func save(image: CGImage, to url: URL, jpeg: Bool) throws {
+        try encodedData(image: image, jpeg: jpeg).write(to: url, options: .atomic)
+    }
+
+    static func encodedData(image: CGImage, jpeg: Bool) throws -> Data {
         let type = jpeg ? UTType.jpeg.identifier : UTType.png.identifier
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, type as CFString, 1, nil) else {
@@ -206,7 +217,54 @@ enum EditorRenderer {
         CGImageDestinationAddImage(destination, exportedImage,
                                   [kCGImageDestinationLossyCompressionQuality: 0.94] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw EditorError.exportFailed }
-        try (data as Data).write(to: url, options: .atomic)
+        return data as Data
+    }
+}
+
+/// Serialize full-resolution work so repeated export clicks cannot allocate many full-size bitmaps.
+/// The canvas does not use this queue while drawing annotations.
+enum EditorRenderWorker {
+    private static let queue = DispatchQueue(label: "LumaCapture.editor.render", qos: .userInitiated)
+
+    static func image(_ source: CGImage, snapshot: EditorSnapshot, maxPixelDimension: Int? = nil) async throws -> CGImage {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let result = try autoreleasepool {
+                        try EditorRenderer.render(image: source, snapshot: snapshot, maxPixelDimension: maxPixelDimension)
+                    }
+                    continuation.resume(returning: result)
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    static func save(_ source: CGImage, snapshot: EditorSnapshot, to url: URL, jpeg: Bool) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    try autoreleasepool {
+                        let image = try EditorRenderer.render(image: source, snapshot: snapshot)
+                        try EditorRenderer.save(image: image, to: url, jpeg: jpeg)
+                    }
+                    continuation.resume()
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    static func png(_ source: CGImage, snapshot: EditorSnapshot) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let data = try autoreleasepool {
+                        let image = try EditorRenderer.render(image: source, snapshot: snapshot)
+                        return try EditorRenderer.encodedData(image: image, jpeg: false)
+                    }
+                    continuation.resume(returning: data)
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
     }
 }
 
@@ -240,7 +298,9 @@ final class EditorDocument: ObservableObject {
     let sourceURL: URL?
     let onExport: (URL) -> Void
     @Published var history: EditorHistory
-    @Published var preview: CGImage
+    /// Downsampled, unannotated original. The canvas overlays vector annotations directly.
+    /// Never use this bitmap for exports; output always renders an immutable document snapshot.
+    @Published private(set) var preview: CGImage
     @Published var tool: EditorTool = .arrow
     @Published var color: NSColor = .systemRed
     @Published var strokeWidth: Double = 6
@@ -249,9 +309,11 @@ final class EditorDocument: ObservableObject {
     @Published var status = "选择工具，在图像上拖动即可标注。"
     @Published var errorMessage: String?
     @Published var isRecognizing = false
+    @Published private(set) var isExporting = false
     @Published var ocrText = ""
     @Published var showsOCR = false
     @Published var zoom: Double = 0 // 0 means fit; otherwise image pixels per view point.
+    var outputSize: CGSize { history.current.cropBounds.size }
 
     init(image: CGImage, sourceURL: URL?, onExport: @escaping (URL) -> Void) {
         self.originalImage = image
@@ -259,6 +321,18 @@ final class EditorDocument: ObservableObject {
         self.sourceURL = sourceURL
         self.onExport = onExport
         self.history = EditorHistory(imageSize: CGSize(width: image.width, height: image.height))
+        // Large Retina captures get one display cache, not a new full-size image per stroke.
+        if max(image.width, image.height) > 2560 {
+            let snapshot = history.current
+            Task { [weak self] in
+                do {
+                    let thumbnail = try await EditorRenderWorker.image(image, snapshot: snapshot, maxPixelDimension: 2560)
+                    self?.preview = thumbnail
+                } catch {
+                    // The original is already available; cache allocation failure is non-fatal.
+                }
+            }
+        }
     }
 
     func commit(_ annotation: EditorAnnotation) {
@@ -271,31 +345,52 @@ final class EditorDocument: ObservableObject {
             next.annotations.append(annotation)
         }
         history.commit(next)
-        refreshPreview()
         status = annotation.tool == .crop ? "已裁剪；可撤销恢复完整图像。" : "已添加\(annotation.tool.title)。"
     }
 
-    func undo() { history.undo(); refreshPreview(); status = "已撤销。" }
-    func redo() { history.redo(); refreshPreview(); status = "已重做。" }
-
-    private func refreshPreview() {
-        do { preview = try EditorRenderer.render(image: originalImage, snapshot: history.current) }
-        catch { errorMessage = error.localizedDescription }
-    }
+    func undo() { guard history.canUndo else { return }; history.undo(); status = "已撤销。" }
+    func redo() { guard history.canRedo else { return }; history.redo(); status = "已重做。" }
 
     func copyImage() {
-        let image = NSImage(cgImage: preview, size: NSSize(width: preview.width, height: preview.height))
-        NSPasteboard.general.clearContents()
-        if NSPasteboard.general.writeObjects([image]) { status = "已复制当前图像（\(preview.width) × \(preview.height) 像素）。" }
-        else { errorMessage = "复制失败，请稍后重试。" }
+        guard !isExporting, !isRecognizing else { return }
+        isExporting = true
+        status = "正在准备复制…"
+        let snapshot = history.current
+        Task { [weak self, originalImage] in
+            do {
+                let data = try await EditorRenderWorker.png(originalImage, snapshot: snapshot)
+                guard let self else { return }
+                defer { self.isExporting = false }
+                NSPasteboard.general.clearContents()
+                if NSPasteboard.general.setData(data, forType: .png) {
+                    self.status = "已复制图像（\(Int(snapshot.cropBounds.width)) × \(Int(snapshot.cropBounds.height)) 像素）。"
+                } else { self.errorMessage = "复制失败，请稍后重试。" }
+            } catch { self?.isExporting = false; self?.errorMessage = error.localizedDescription }
+        }
+    }
+
+    func preparePin(onReady: @escaping (CGImage) -> Void) {
+        guard !isExporting, !isRecognizing else { return }
+        isExporting = true
+        let snapshot = history.current
+        Task { [weak self, originalImage] in
+            do {
+                let image = try await EditorRenderWorker.image(originalImage, snapshot: snapshot)
+                guard let self else { return }
+                self.isExporting = false
+                self.status = "已创建置顶贴图。"
+                onReady(image)
+            } catch { self?.isExporting = false; self?.errorMessage = error.localizedDescription }
+        }
     }
 
     func recognizeText() {
-        guard !isRecognizing else { return }
+        guard !isRecognizing, !isExporting else { return }
         isRecognizing = true
-        let image = preview
-        Task { [weak self] in
+        let snapshot = history.current
+        Task { [weak self, originalImage] in
             do {
+                let image = try await EditorRenderWorker.image(originalImage, snapshot: snapshot)
                 let result = try await EditorOCR.recognizeAsync(image: image)
                 guard let self else { return }
                 self.ocrText = result
@@ -310,6 +405,7 @@ final class EditorDocument: ObservableObject {
     }
 
     func save(jpeg: Bool, window: NSWindow?) {
+        guard !isExporting else { return }
         let panel = NSSavePanel()
         panel.title = jpeg ? "另存为 JPEG" : "另存为 PNG"
         panel.allowedContentTypes = [jpeg ? .jpeg : .png]
@@ -320,11 +416,19 @@ final class EditorDocument: ObservableObject {
         panel.nameFieldStringValue = basename + "-已编辑." + (jpeg ? "jpg" : "png")
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
-            do {
-                try EditorRenderer.save(image: self.preview, to: url, jpeg: jpeg)
-                self.status = "已保存：\(url.lastPathComponent)"
-                self.onExport(url)
-            } catch { self.errorMessage = error.localizedDescription }
+            self.isExporting = true
+            self.status = "正在保存…"
+            let snapshot = self.history.current
+            let source = self.originalImage
+            Task { [weak self] in
+                do {
+                    try await EditorRenderWorker.save(source, snapshot: snapshot, to: url, jpeg: jpeg)
+                    guard let self else { return }
+                    self.isExporting = false
+                    self.status = "已保存：\(url.lastPathComponent)"
+                    self.onExport(url)
+                } catch { self?.isExporting = false; self?.errorMessage = error.localizedDescription }
+            }
         }
         if let window { panel.beginSheetModal(for: window, completionHandler: finish) }
         else { panel.begin(completionHandler: finish) }

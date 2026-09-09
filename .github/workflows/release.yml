@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag, for example v0.1.0
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -10,11 +16,28 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
-      - name: Test and build Universal release
-        run: scripts/test.sh && scripts/test.sh --arch x86_64 --portable && scripts/build.sh --self-test --version "${GITHUB_REF_NAME#v}"
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Validate version
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+      - name: Core regression tests
+        run: scripts/test.sh
+      - name: Intel cross-compilation tests
+        run: scripts/test.sh --arch x86_64 --portable
+      - name: Build and verify release archives
+        run: scripts/build.sh --self-test --version "$VERSION"
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.dmg dist/*.sha256 --verify-tag --generate-notes --title "LumaCapture ${GITHUB_REF_NAME#v}"
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --notes-file .github/RELEASE_NOTES.md --title "LumaCapture $VERSION"
+          fi
+          gh release upload "$RELEASE_TAG" "dist/LumaCapture-$VERSION-universal.zip" "dist/LumaCapture-$VERSION-universal.dmg" "dist/LumaCapture-$VERSION-universal.sha256" --clobber

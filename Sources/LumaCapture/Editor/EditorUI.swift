@@ -16,7 +16,9 @@ final class EditorCoordinator: NSObject, NSWindowDelegate {
         window.delegate = self
         window.contentView = NSHostingView(rootView: EditorRootView(document: document,
             onSave: { [weak window] jpeg in document.save(jpeg: jpeg, window: window) },
-            onPin: { [weak self] in self?.pin(image: document.preview) }))
+            onPin: { [weak self] in
+                document.preparePin { [weak self] image in self?.pin(image: image) }
+            }))
         let controller = NSWindowController(window: window)
         windows[ObjectIdentifier(window)] = controller
         window.center()
@@ -78,19 +80,22 @@ private struct EditorRootView: View {
                 Button(action: document.recognizeText) {
                     Label(document.isRecognizing ? "识别中…" : "提取文字", systemImage: "text.viewfinder")
                 }
-                .disabled(document.isRecognizing)
+                .disabled(document.isRecognizing || document.isExporting)
                 .help("使用本机 Vision 识别中文和英文")
                 Button(action: onPin) { Label("贴图", systemImage: "pin") }
+                    .disabled(document.isRecognizing || document.isExporting)
                     .help("将当前编辑结果显示在置顶参考窗")
                 Menu {
                     Button("另存为 PNG…") { onSave(false) }.keyboardShortcut("s", modifiers: .command)
                     Button("另存为 JPEG…") { onSave(true) }.keyboardShortcut("s", modifiers: [.command, .shift])
                 } label: { Label("另存为", systemImage: "square.and.arrow.down") }
                     .fixedSize()
+                    .disabled(document.isRecognizing || document.isExporting)
                 Button(action: document.copyImage) { Label("复制图像", systemImage: "doc.on.doc") }
                     .buttonStyle(.borderedProminent)
                     .tint(.mint)
                     .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(document.isRecognizing || document.isExporting)
                     .help("复制当前编辑结果（⌘⇧C；画布中也可使用 ⌘C）")
             }
             .controlSize(.large)
@@ -176,7 +181,7 @@ private struct EditorRootView: View {
                 Image(systemName: "info.circle").foregroundStyle(.mint)
                 Text(document.status).lineLimit(1).truncationMode(.middle)
                 Spacer()
-                Text("\(document.preview.width) × \(document.preview.height) px")
+                Text("\(Int(document.outputSize.width)) × \(Int(document.outputSize.height)) px")
                     .monospacedDigit().foregroundStyle(.secondary)
                 Text("本地处理").foregroundStyle(.secondary)
             }

@@ -7,6 +7,7 @@ LumaCapture 是一款原生 macOS 截图与录屏工具，面向 Apple Silicon �
 ## 功能
 
 - 显示器、应用窗口、拖选区域截图，支持多显示器与 Retina
+- 截图完成后直接进入编辑器，原始 PNG 在后台压缩和保存
 - 画笔、箭头、矩形、椭圆、高亮、文字、不透明隐私遮挡和裁剪
 - 撤销/重做、PNG/JPEG 导出、复制到剪贴板
 - 使用 Apple Vision 离线识别简体中文与英文
@@ -20,7 +21,7 @@ LumaCapture 是一款原生 macOS 截图与录屏工具，面向 Apple Silicon �
 
 从 GitHub Releases 下载 `LumaCapture-0.1.0-universal.dmg`，把 LumaCapture 拖到“应用程序”。也可下载 ZIP 后解压。
 
-0.1.0 的公开构建使用 ad-hoc 本地签名，没有 Apple 公证。首次启动若 macOS 阻止打开，请在 Finder 中右键 LumaCapture，选择“打开”，再确认一次。自行配置 Developer ID 后，构建脚本可生成 hardened runtime 签名包。
+0.1.0 的公开构建使用 ad-hoc 本地签名，没有 Apple 公证。首次启动若 macOS 阻止打开，请先尝试打开一次，再前往“系统设置 → 隐私与安全性”，找到被阻止的 LumaCapture 并选择“仍要打开”。自行配置 Developer ID 后，构建脚本可生成 hardened runtime 签名包。
 
 首次截图或录屏时，在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”允许 LumaCapture。只有启用麦克风录制时才会请求麦克风权限。系统可能要求退出并重新打开应用。
 
@@ -54,11 +55,12 @@ Apple 公证需要开发者账户凭据，须在签名之后另行执行 `notary
 ```bash
 scripts/test.sh
 scripts/test.sh --arch x86_64 --portable
+scripts/benchmark-editor.sh
 scripts/verify-bundle.sh /path/to/LumaCapture.app
-shasum -a 256 -c dist/LumaCapture-0.1.0-universal.sha256
+(cd dist && shasum -a 256 -c LumaCapture-0.1.0-universal.sha256)
 ```
 
-`scripts/test.sh` 验证负坐标显示器坐标、区域裁剪、Retina 像素、视频偶数尺寸、历史记录损坏处理、容量限制、Unicode 路径及文件名碰撞。`scripts/build.sh --self-test` 额外验证编辑渲染、裁剪方向、隐私遮挡像素、PNG/JPEG 回读和应用包结构。真实屏幕与音频捕获仍需由已授予权限的交互会话验证。
+`scripts/test.sh` 验证负坐标显示器坐标、区域裁剪、Retina 像素、视频偶数尺寸、历史记录损坏处理、容量限制、Unicode 路径及文件名碰撞。`scripts/benchmark-editor.sh` 使用合成 4K 图像、80 个标注和 10,000 个涂鸦点记录渲染与导出基准。`scripts/build.sh --self-test` 额外验证编辑渲染、裁剪方向、隐私遮挡像素、PNG/JPEG 回读和应用包结构。真实屏幕与音频捕获仍需由已授予权限的交互会话验证。
 
 ## 项目结构
 

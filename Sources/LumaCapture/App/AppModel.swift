@@ -108,14 +108,22 @@ final class AppModel: ObservableObject {
                 try Task.checkCancellation()
                 let image = try await self.capture.capture(target: target, region: region, showsCursor: self.showsCursor)
                 let output = try self.newOutput(kind: .screenshot, extension: "png")
-                try Self.writePNG(image, to: output)
-                self.addRecord(output, kind: .screenshot)
+                // Present the editor as soon as ScreenCaptureKit returns. Encoding
+                // a multi-megapixel PNG happens off the main actor so a Retina
+                // screenshot never makes the interface wait on disk compression.
+                self.restoreWindows()
+                self.editor.open(image: image, sourceURL: output) { [weak self] url in
+                    self?.addRecord(url, kind: .screenshot)
+                }
+                self.message = "截图已打开，正在后台保存原图…"
                 if self.copyAfterCapture {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.writeObjects([NSImage(cgImage: image, size: .zero)])
                 }
-                self.restoreWindows()
-                self.editor.open(image: image, sourceURL: output) { [weak self] url in self?.addRecord(url, kind: .screenshot) }
+                try await Task.detached(priority: .utility) {
+                    try Self.writePNG(image, to: output)
+                }.value
+                self.addRecord(output, kind: .screenshot)
                 self.message = "截图已保存，\(image.width) × \(image.height) 像素"
             } catch is CancellationError { self.message = "已取消" }
             catch { self.error = error.localizedDescription }
@@ -241,7 +249,7 @@ final class AppModel: ObservableObject {
         }
         countdown = nil
     }
-    static func writePNG(_ image: CGImage, to url: URL) throws {
+    nonisolated static func writePNG(_ image: CGImage, to url: URL) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { throw AppFailure("无法创建截图文件，请检查保存目录。") }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw AppFailure("截图保存失败，请检查磁盘空间及目录权限。") }

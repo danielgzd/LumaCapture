@@ -11,6 +11,7 @@
 | T05 控制台与数据 | 主 agent | Sources/LumaCapture/App/、Sources/LumaCaptureCore/ | 主界面、历史、设置、快捷键、状态联动 |
 | T06 集成验收 | 主 agent + 各模块复审 | docs/ACCEPTANCE.md | 修复编译及功能问题，记录真实结果 |
 | T07 GitHub 发布 | 主 agent | README.md、LICENSE、仓库与 Release | 提交代码，上传 ZIP/DMG/校验值 |
+| T08 编辑性能与流程收敛 | 主 agent + editor/capture agents | App、Capture、Editor | 截图返回后直接开编辑器，后台保存；减少重复来源枚举与全尺寸渲染 |
 
 ## 模块接口
 

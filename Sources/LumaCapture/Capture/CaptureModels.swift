@@ -21,6 +21,12 @@ struct CaptureTarget: Identifiable, Hashable {
 
     static func == (lhs: CaptureTarget, rhs: CaptureTarget) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    var resolvedWindowID: CGWindowID? {
+        if let windowID { return windowID }
+        guard id.hasPrefix("window:") else { return nil }
+        return UInt32(id.dropFirst("window:".count))
+    }
 }
 
 struct RecordingOptions {
@@ -145,6 +151,21 @@ enum CaptureGeometry {
         let b = clamp(end)
         return CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
                       width: abs(a.x - b.x), height: abs(a.y - b.y))
+    }
+
+    static func pixelAlignedRegion(_ region: CGRect, displaySize: CGSize, scale: CGFloat) throws -> CGRect {
+        guard scale.isFinite, scale > 0 else { throw CaptureError.invalidRegion }
+        let clipped = try validatedRegion(region, displaySize: displaySize)
+        let left = floor(clipped.minX * scale) / scale
+        let top = floor(clipped.minY * scale) / scale
+        let right = ceil(clipped.maxX * scale) / scale
+        let bottom = ceil(clipped.maxY * scale) / scale
+        return try validatedRegion(CGRect(x: left, y: top, width: right - left, height: bottom - top),
+                                   displaySize: displaySize)
+    }
+
+    static func topLeftRegion(fromBottomLeft rect: CGRect, displayHeight: CGFloat) -> CGRect {
+        CGRect(x: rect.minX, y: displayHeight - rect.maxY, width: rect.width, height: rect.height)
     }
 
     static func pixelSize(points: CGSize, scale: CGFloat, recording: Bool) throws -> (width: Int, height: Int) {

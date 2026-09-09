@@ -8,15 +8,19 @@ LUMA_SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 LUMA_DMG=1
 LUMA_ARCHIVE=1
 LUMA_SELF_TEST=0
+LUMA_APP_OUTPUT=''
+LUMA_KEEP_STAGE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) LUMA_VERSION="${2:?A version is required}"; shift 2 ;;
     --no-dmg) LUMA_DMG=0; shift ;;
     --no-archive) LUMA_ARCHIVE=0; shift ;;
     --self-test) LUMA_SELF_TEST=1; shift ;;
+    --app-output) LUMA_APP_OUTPUT="${2:?An output .app path is required}"; shift 2 ;;
     --help)
-      echo 'Usage: scripts/build.sh [--version 0.1.0] [--no-dmg] [--no-archive] [--self-test]'
+      echo 'Usage: scripts/build.sh [--version 0.1.0] [--no-dmg] [--no-archive] [--self-test] [--app-output /path/LumaCapture.app]'
       echo 'Environment: SIGN_IDENTITY (default ad-hoc), BUILD_NUMBER, LUMA_BUILD_DIR'
+      echo '--no-archive retains the built app in a temporary directory unless --app-output is supplied.'
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -29,12 +33,16 @@ if [[ ! "$LUMA_BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
   echo 'BUILD_NUMBER must be an integer.' >&2
   exit 2
 fi
+if [[ -n "$LUMA_APP_OUTPUT" ]] && { [[ "$LUMA_APP_OUTPUT" != /*.app ]] || [[ -e "$LUMA_APP_OUTPUT" ]]; }; then
+  echo '--app-output must be an absolute, new .app path. Use a location outside iCloud Drive.' >&2
+  exit 2
+fi
 
 LUMA_DIST="$LUMA_ROOT/dist"
 # Assemble/sign outside iCloud Drive. Its file provider can immediately attach
 # FinderInfo to a live .app directory, which strict code signing correctly rejects.
 LUMA_STAGE_ROOT="$(mktemp -d /private/tmp/LumaCapture-build.XXXXXX)"
-cleanup() { rm -rf "$LUMA_STAGE_ROOT"; }
+cleanup() { if [[ "$LUMA_KEEP_STAGE" == 0 ]]; then rm -rf "$LUMA_STAGE_ROOT"; fi; }
 trap cleanup EXIT
 LUMA_APP="$LUMA_STAGE_ROOT/LumaCapture.app"
 mkdir -p "$LUMA_DIST" "$LUMA_BUILD/universal" "$LUMA_APP/Contents/MacOS" "$LUMA_APP/Contents/Resources"
@@ -95,10 +103,20 @@ if [[ "$LUMA_ARCHIVE" == 1 ]]; then
     ln -s /Applications "$staging/Applications"
     hdiutil create -volname "LumaCapture $LUMA_VERSION" -srcfolder "$staging" \
       -ov -format UDZO -fs HFS+ "$LUMA_DIST/$artifact_base.dmg"
-    hdiutil verify "$LUMA_DIST/$artifact_base.dmg"
     artifacts+=("$artifact_base.dmg")
   fi
   (cd "$LUMA_DIST" && shasum -a 256 "${artifacts[@]}" > "$artifact_base.sha256")
-  echo "Artifacts: $LUMA_DIST/$artifact_base.{zip,dmg,sha256}"
+  "$LUMA_ROOT/scripts/verify-artifacts.sh" "$LUMA_DIST" "$LUMA_VERSION"
+  echo "Verified archives and checksums in $LUMA_DIST"
+fi
+if [[ -n "$LUMA_APP_OUTPUT" ]]; then
+  mkdir -p "$(dirname "$LUMA_APP_OUTPUT")"
+  ditto --noextattr --norsrc "$LUMA_APP" "$LUMA_APP_OUTPUT"
+  "$LUMA_ROOT/scripts/verify-bundle.sh" "$LUMA_APP_OUTPUT"
+  echo "App: $LUMA_APP_OUTPUT"
+elif [[ "$LUMA_ARCHIVE" == 0 ]]; then
+  LUMA_KEEP_STAGE=1
+  echo "App: $LUMA_APP"
+  echo "This temporary build directory is retained until you remove it: $LUMA_STAGE_ROOT"
 fi
 echo "Built and verified LumaCapture.app (signing identity: $LUMA_SIGN_IDENTITY)"

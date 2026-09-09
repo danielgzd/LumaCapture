@@ -4,16 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Core behavior tests
         run: scripts/test.sh
       - name: Intel cross-compilation tests
         run: scripts/test.sh --arch x86_64 --portable
+      - name: Synthetic 4K editor performance baseline
+        run: scripts/benchmark-editor.sh
       - name: Universal application and self-test
         run: scripts/build.sh --self-test
       - uses: actions/upload-artifact@v4
@@ -23,4 +30,7 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.sha256
+            .build/self-test/**
+            .build/benchmarks/editor-benchmark.json
           if-no-files-found: error
+          retention-days: 14

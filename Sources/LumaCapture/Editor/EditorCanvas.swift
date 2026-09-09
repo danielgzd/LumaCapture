@@ -37,6 +37,20 @@ final class EditorCanvasView: NSView {
     private var draft: EditorAnnotation?
     private var scale: CGFloat = 1
     private var imageFrame: CGRect = .zero
+    private var draftPath: CGMutablePath?
+    private var cachedSource: CGImage?
+    private var sourceRepresentation: NSImage?
+    private let checkerColor: NSColor = {
+        let tile = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+            NSColor(calibratedWhite: 0.88, alpha: 1).setFill()
+            NSRect(x: 0, y: 0, width: 24, height: 24).fill()
+            NSColor(calibratedWhite: 0.76, alpha: 1).setFill()
+            NSRect(x: 0, y: 0, width: 12, height: 12).fill()
+            NSRect(x: 12, y: 12, width: 12, height: 12).fill()
+            return true
+        }
+        return NSColor(patternImage: tile)
+    }()
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -62,6 +76,7 @@ final class EditorCanvasView: NSView {
         imageFrame = CGRect(x: (canvasSize.width - displaySize.width) / 2,
                             y: (canvasSize.height - displaySize.height) / 2,
                             width: displaySize.width, height: displaySize.height)
+        window?.invalidateCursorRects(for: self)
     }
 
     override func resetCursorRects() {
@@ -74,34 +89,30 @@ final class EditorCanvasView: NSView {
         dirtyRect.fill()
         guard imageFrame.width > 0 else { return }
         // Checkerboard makes transparent screenshots visible without changing exported pixels.
-        NSColor(calibratedWhite: 0.88, alpha: 1).setFill()
+        checkerColor.setFill()
         imageFrame.fill()
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: imageFrame).addClip()
-        let tile: CGFloat = 12
-        NSColor(calibratedWhite: 0.76, alpha: 1).setFill()
-        let visible = imageFrame.intersection(dirtyRect)
-        if !visible.isNull {
-            let startX = max(0, Int((visible.minX - imageFrame.minX) / tile))
-            let endX = max(startX, Int(ceil((visible.maxX - imageFrame.minX) / tile)))
-            let startY = max(0, Int((visible.minY - imageFrame.minY) / tile))
-            let endY = max(startY, Int(ceil((visible.maxY - imageFrame.minY) / tile)))
-            for row in startY...endY {
-                for column in startX...endX where (row + column).isMultiple(of: 2) {
-                    NSRect(x: imageFrame.minX + CGFloat(column) * tile, y: imageFrame.minY + CGFloat(row) * tile,
-                           width: tile, height: tile).fill()
-                }
-            }
+        let crop = document.history.current.cropBounds
+        // Use the display cache when it has enough pixels for the backing scale. Zooming
+        // into detail uses the original; neither operation creates a composited full-size copy.
+        let cacheScale = CGFloat(document.preview.width) / CGFloat(document.originalImage.width)
+        let source = scale * (window?.backingScaleFactor ?? 2) <= cacheScale * 1.05 ? document.preview : document.originalImage
+        if cachedSource !== source {
+            cachedSource = source
+            sourceRepresentation = NSImage(cgImage: source, size: NSSize(width: document.originalImage.width, height: document.originalImage.height))
         }
-        NSImage(cgImage: document.preview, size: NSSize(width: document.preview.width, height: document.preview.height))
-            .draw(in: imageFrame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
-        if let draft, let context = NSGraphicsContext.current?.cgContext {
+        let sourceFrame = CGRect(x: imageFrame.minX - crop.minX * scale, y: imageFrame.minY - crop.minY * scale,
+                                 width: CGFloat(document.originalImage.width) * scale, height: CGFloat(document.originalImage.height) * scale)
+        sourceRepresentation?.draw(in: sourceFrame, from: .zero, operation: .sourceOver, fraction: 1,
+                                   respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+        if let context = NSGraphicsContext.current?.cgContext {
             context.saveGState()
             context.translateBy(x: imageFrame.minX, y: imageFrame.minY)
             context.scaleBy(x: scale, y: scale)
-            let crop = document.history.current.cropBounds
             context.translateBy(x: -crop.minX, y: -crop.minY)
-            if draft.tool == .crop {
+            EditorRenderer.draw(annotations: document.history.current.annotations, in: context)
+            if let draft, draft.tool == .crop {
                 let selected = draft.bounds.intersection(crop)
                 context.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
                 context.fill(CGRect(x: crop.minX, y: crop.minY, width: crop.width, height: max(0, selected.minY - crop.minY)))
@@ -112,7 +123,7 @@ final class EditorCanvasView: NSView {
                 context.setStrokeColor(NSColor.white.cgColor)
                 context.setLineDash(phase: 0, lengths: [6 / scale, 4 / scale])
                 context.stroke(selected)
-            } else {
+            } else if let draft {
                 EditorRenderer.draw(annotations: [draft], in: context)
             }
             context.restoreGState()
@@ -143,25 +154,51 @@ final class EditorCanvasView: NSView {
             document.commit(annotation)
         } else {
             if document.tool != .pen { annotation.points.append(start) }
+            else {
+                let path = CGMutablePath()
+                path.move(to: start)
+                draftPath = path
+                annotation.strokePath = path
+            }
             draft = annotation
         }
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard var annotation = draft, let position = point(for: event, clamp: true) else { return }
-        if annotation.tool == .pen { annotation.points.append(position) }
-        else { annotation.points[annotation.points.count - 1] = position }
-        draft = annotation
-        if annotation.tool == .crop {
-            document.status = "裁剪区域：\(Int(annotation.bounds.width)) × \(Int(annotation.bounds.height)) 像素 · 松开应用 · Esc 取消"
+        guard let tool = draft?.tool, let position = point(for: event, clamp: true) else { return }
+        if tool == .pen, let previous = draft?.points.last {
+            // Sampling in view points avoids thousands of indistinguishable tablet/mouse events.
+            guard hypot(position.x - previous.x, position.y - previous.y) * scale >= 0.7 else { return }
+            draft?.points.append(position)
+            draftPath?.addLine(to: position)
+            let margin = (draft?.width ?? 6) / 2 + 2 / scale
+            let changed = CGRect(x: min(position.x, previous.x), y: min(position.y, previous.y),
+                                 width: abs(position.x - previous.x), height: abs(position.y - previous.y)).insetBy(dx: -margin, dy: -margin)
+            let crop = document.history.current.cropBounds
+            setNeedsDisplay(CGRect(x: imageFrame.minX + (changed.minX - crop.minX) * scale,
+                                   y: imageFrame.minY + (changed.minY - crop.minY) * scale,
+                                   width: changed.width * scale, height: changed.height * scale))
+        } else {
+            if let count = draft?.points.count, count > 0 { draft?.points[count - 1] = position }
+            needsDisplay = true
         }
-        needsDisplay = true
+        if tool == .crop, let bounds = draft?.bounds {
+            document.status = "裁剪区域：\(Int(bounds.width)) × \(Int(bounds.height)) 像素 · 松开应用 · Esc 取消"
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let annotation = draft else { return }
+        guard var annotation = draft else { return }
+        if let finalPoint = point(for: event, clamp: true) {
+            if annotation.tool == .pen, annotation.points.last != finalPoint {
+                annotation.points.append(finalPoint)
+                draftPath?.addLine(to: finalPoint)
+            } else if annotation.tool != .pen { annotation.points[annotation.points.count - 1] = finalPoint }
+        }
+        annotation.strokePath = draftPath?.copy()
         draft = nil
+        draftPath = nil
         let valid: Bool
         switch annotation.tool {
         case .pen: valid = true
@@ -176,6 +213,7 @@ final class EditorCanvasView: NSView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
             draft = nil
+            draftPath = nil
             document.status = "已取消当前绘制。"
             needsDisplay = true
         } else if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "z" {

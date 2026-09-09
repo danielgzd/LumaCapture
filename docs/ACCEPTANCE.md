@@ -1,6 +1,6 @@
 # LumaCapture 0.1.0 验收记录
 
-日期：2026-09-08  
+日期：2026-09-09
 环境：macOS 26.6.2，Apple Silicon arm64，Xcode 26.6 / SDK 26.5
 
 ## 自动化结果
@@ -15,6 +15,7 @@
 | 编辑渲染 | 通过 | 合成图像方向、裁剪、标注、遮挡不透明像素 |
 | 图像导出 | 通过 | 500 × 160 PNG/JPEG 写入并通过 ImageIO 回读 |
 | OCR 合成图检查 | 通过 | 在完整系统构建环境识别出合成英文/数字；受限沙箱内会被 Vision 拒绝，脚本明确标记为跳过 |
+| 4K 编辑性能基准 | 通过 | 3840 × 2160、80 个标注、10,000 个涂鸦点：中位渲染 12.5 ms，p95 12.8 ms；PNG 80.5 ms，JPEG 30.3 ms |
 | 真实 ScreenCaptureKit | 权限受限 | 自动检查不触发用户 TCC 授权，不宣称通过 |
 
 ## 交互验收
@@ -46,4 +47,4 @@
 
 ## GitHub 状态
 
-GitHub 连接器识别账号 `danielgzd`，但其安装范围内没有可访问仓库；本机 `gh auth status` 显示未登录。源码、提交和发布资产已在本地准备，远程建仓、推送和 Release 上传需本机 GitHub CLI 登录后完成。
+GitHub CLI 已认证账号 `danielgzd`。源码、文档、CI、Universal 2 安装包和校验文件发布到私有仓库 `danielgzd/LumaCapture` 的 `v0.1.0` Release。
