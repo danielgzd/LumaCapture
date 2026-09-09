@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import Vision
 
 enum EditorTool: String, CaseIterable, Identifiable {
-    case pen, arrow, rectangle, ellipse, highlight, text, redact, crop
+    case pen, arrow, rectangle, ellipse, highlight, text, redact, crop, image
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -15,8 +15,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .ellipse: return "椭圆"
         case .highlight: return "高亮"
         case .text: return "文字"
-        case .redact: return "遮挡"
+        case .redact: return "马赛克"
         case .crop: return "裁剪"
+        case .image: return "贴图"
         }
     }
     var symbol: String {
@@ -27,8 +28,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .ellipse: return "circle"
         case .highlight: return "highlighter"
         case .text: return "textformat"
-        case .redact: return "rectangle.fill"
+        case .redact: return "square.grid.3x3.fill"
         case .crop: return "crop"
+        case .image: return "photo.badge.plus"
         }
     }
 }
@@ -40,6 +42,10 @@ struct EditorAnnotation {
     var width: CGFloat
     var text: String = ""
     var fontSize: CGFloat = 36
+    var isBold = false
+    var cornerRadius: CGFloat = 0
+    var embeddedImage: CGImage? = nil
+    var rotationDegrees: CGFloat = 0
     var strokePath: CGPath? = nil
     var bounds: CGRect {
         guard let first = points.first, let last = points.last else { return .zero }
@@ -51,6 +57,8 @@ struct EditorAnnotation {
 struct EditorSnapshot {
     var annotations: [EditorAnnotation] = []
     var cropBounds: CGRect
+    var rotationQuarterTurns: Int = 0
+    var imageScale: CGFloat = 1
 }
 
 /// History contains lightweight annotation/crop state; the original bitmap stays immutable.
@@ -93,31 +101,44 @@ enum EditorError: LocalizedError {
 
 enum EditorRenderer {
     /// All annotation coordinates use original-image pixels, with the origin at the upper left.
-    /// Preview and exported files use this same renderer, including the exact opaque redaction.
+    /// Preview and exported files use the same coordinates and irreversible mosaic renderer.
     static func render(image: CGImage, snapshot: EditorSnapshot, maxPixelDimension: Int? = nil) throws -> CGImage {
         let crop = snapshot.cropBounds.integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
         guard crop.width >= 2, crop.height >= 2 else { throw EditorError.invalidCrop }
         let scale = maxPixelDimension.map { min(1, CGFloat(max(1, $0)) / max(crop.width, crop.height)) } ?? 1
-        let width = max(1, Int((crop.width * scale).rounded()))
-        let height = max(1, Int((crop.height * scale).rounded()))
+        let quarterTurns = ((snapshot.rotationQuarterTurns % 4) + 4) % 4
+        let documentScale = max(0.1, min(4, snapshot.imageScale))
+        let rotatedSize = quarterTurns.isMultiple(of: 2) ? crop.size : CGSize(width: crop.height, height: crop.width)
+        let width = max(1, Int((rotatedSize.width * scale * documentScale).rounded()))
+        let height = max(1, Int((rotatedSize.height * scale * documentScale).rounded()))
+        let baseWidth = max(1, Int((crop.width * scale).rounded()))
+        let baseHeight = max(1, Int((crop.height * scale).rounded()))
+        guard let base = CGContext(data: nil, width: baseWidth, height: baseHeight, bitsPerComponent: 8,
+                                   bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw EditorError.renderFailed }
+        base.interpolationQuality = .high
+        base.scaleBy(x: CGFloat(baseWidth) / crop.width, y: CGFloat(baseHeight) / crop.height)
+        base.draw(image, in: CGRect(x: -crop.minX, y: crop.maxY - CGFloat(image.height), width: CGFloat(image.width), height: CGFloat(image.height)))
+        base.translateBy(x: -crop.minX, y: crop.maxY)
+        base.scaleBy(x: 1, y: -1)
+        draw(annotations: snapshot.annotations, sourceImage: image, in: base)
+        guard let composed = base.makeImage() else { throw EditorError.renderFailed }
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw EditorError.renderFailed
         }
         context.interpolationQuality = .high
-        context.scaleBy(x: CGFloat(width) / crop.width, y: CGFloat(height) / crop.height)
-        // CGContext is bottom-up here. Position the source so a top-left crop stays pixel exact.
-        context.draw(image, in: CGRect(x: -crop.minX, y: crop.maxY - CGFloat(image.height),
-                                      width: CGFloat(image.width), height: CGFloat(image.height)))
-        context.translateBy(x: -crop.minX, y: crop.maxY)
-        context.scaleBy(x: 1, y: -1)
-        draw(annotations: snapshot.annotations, in: context)
+        context.translateBy(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+        context.rotate(by: -CGFloat(quarterTurns) * .pi / 2)
+        let drawWidth = CGFloat(baseWidth) * documentScale
+        let drawHeight = CGFloat(baseHeight) * documentScale
+        context.draw(composed, in: CGRect(x: -drawWidth / 2, y: -drawHeight / 2, width: drawWidth, height: drawHeight))
         guard let result = context.makeImage() else { throw EditorError.renderFailed }
         return result
     }
 
-    static func draw(annotations: [EditorAnnotation], in context: CGContext) {
+    static func draw(annotations: [EditorAnnotation], sourceImage: CGImage? = nil, in context: CGContext) {
         for annotation in annotations {
             guard let start = annotation.points.first else { continue }
             let end = annotation.points.last ?? start
@@ -159,20 +180,18 @@ enum EditorRenderer {
                 context.closePath()
                 context.fillPath()
             case .rectangle:
-                context.stroke(annotation.bounds)
+                let radius = min(annotation.cornerRadius, min(annotation.bounds.width, annotation.bounds.height) / 2)
+                context.addPath(CGPath(roundedRect: annotation.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                context.strokePath()
             case .ellipse:
                 context.strokeEllipse(in: annotation.bounds)
             case .highlight:
                 context.setFillColor(color.withAlphaComponent(0.3).cgColor)
                 context.fill(annotation.bounds)
             case .redact:
-                // A solid black fill hides underlying pixels. This is deliberately not blur/pixelation.
-                context.setShouldAntialias(false)
-                context.setBlendMode(.copy)
-                context.setFillColor(NSColor.black.cgColor)
-                context.fill(annotation.bounds.integral)
+                if let sourceImage { drawMosaic(source: sourceImage, bounds: annotation.bounds, in: context) }
             case .text:
-                let font = CTFontCreateWithName("Helvetica-Bold" as CFString, annotation.fontSize, nil)
+                let font = CTFontCreateWithName((annotation.isBold ? "Helvetica-Bold" : "Helvetica") as CFString, annotation.fontSize, nil)
                 let attributes: [NSAttributedString.Key: Any] = [
                     NSAttributedString.Key(kCTFontAttributeName as String): font,
                     NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor
@@ -186,10 +205,41 @@ enum EditorRenderer {
                     CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: line, attributes: attributes)), context)
                     context.restoreGState()
                 }
+            case .image:
+                if let image = annotation.embeddedImage {
+                    let bounds = annotation.bounds
+                    context.translateBy(x: bounds.midX, y: bounds.midY)
+                    context.rotate(by: annotation.rotationDegrees * .pi / 180)
+                    context.translateBy(x: -bounds.midX, y: -bounds.midY)
+                    context.saveGState()
+                    context.translateBy(x: bounds.minX, y: bounds.maxY)
+                    context.scaleBy(x: 1, y: -1)
+                    context.draw(image, in: CGRect(origin: .zero, size: bounds.size))
+                    context.restoreGState()
+                }
             case .crop: break
             }
             context.restoreGState()
         }
+    }
+
+    private static func drawMosaic(source: CGImage, bounds: CGRect, in context: CGContext) {
+        let region = bounds.integral.intersection(CGRect(x: 0, y: 0, width: source.width, height: source.height))
+        guard region.width >= 2, region.height >= 2, let cropped = source.cropping(to: region) else { return }
+        let block: CGFloat = 12
+        let smallWidth = max(1, Int(ceil(region.width / block)))
+        let smallHeight = max(1, Int(ceil(region.height / block)))
+        guard let small = CGContext(data: nil, width: smallWidth, height: smallHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        small.interpolationQuality = .low
+        small.draw(cropped, in: CGRect(x: 0, y: 0, width: smallWidth, height: smallHeight))
+        guard let pixels = small.makeImage() else { return }
+        context.saveGState()
+        context.interpolationQuality = .none
+        context.translateBy(x: region.minX, y: region.maxY)
+        context.scaleBy(x: 1, y: -1)
+        context.draw(pixels, in: CGRect(origin: .zero, size: region.size))
+        context.restoreGState()
     }
 
     static func save(image: CGImage, to url: URL, jpeg: Bool) throws {
@@ -292,6 +342,21 @@ enum EditorOCR {
     }
 }
 
+enum EditorBarcode {
+    static func recognize(image: CGImage) async throws -> [String] {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let request = VNDetectBarcodesRequest()
+                request.symbologies = [.qr]
+                do {
+                    try VNImageRequestHandler(cgImage: image).perform([request])
+                    continuation.resume(returning: (request.results ?? []).compactMap(\.payloadStringValue))
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+}
+
 @MainActor
 final class EditorDocument: ObservableObject {
     let originalImage: CGImage
@@ -301,19 +366,35 @@ final class EditorDocument: ObservableObject {
     /// Downsampled, unannotated original. The canvas overlays vector annotations directly.
     /// Never use this bitmap for exports; output always renders an immutable document snapshot.
     @Published private(set) var preview: CGImage
-    @Published var tool: EditorTool = .arrow
+    @Published var tool: EditorTool? = nil
     @Published var color: NSColor = .systemRed
     @Published var strokeWidth: Double = 6
     @Published var fontSize: Double = 36
-    @Published var text = "标注文字"
-    @Published var status = "选择工具，在图像上拖动即可标注。"
+    @Published var text = ""
+    @Published var isBold = false
+    @Published var rectangleCornerRadius: Double = 0
+    @Published var stickerScale: Double = 1
+    @Published var stickerRotation: Double = 0
+    @Published private(set) var selectedStickerIndex: Int?
+    @Published var status = "请选择工具，或直接保存当前图像。"
     @Published var errorMessage: String?
     @Published var isRecognizing = false
     @Published private(set) var isExporting = false
     @Published var ocrText = ""
     @Published var showsOCR = false
+    @Published var qrResults: [String] = []
+    @Published var showsQR = false
+    @Published var base64Text = ""
+    @Published var showsBase64 = false
+    @Published var base64ModeIsDecode = false
+    @Published var pendingTextPoint: CGPoint?
+    @Published var showsTextEntry = false
     @Published var zoom: Double = 0 // 0 means fit; otherwise image pixels per view point.
-    var outputSize: CGSize { history.current.cropBounds.size }
+    var outputSize: CGSize {
+        let size = history.current.cropBounds.size
+        let rotated = history.current.rotationQuarterTurns.isMultiple(of: 2) ? size : CGSize(width: size.height, height: size.width)
+        return CGSize(width: rotated.width * history.current.imageScale, height: rotated.height * history.current.imageScale)
+    }
 
     init(image: CGImage, sourceURL: URL?, onExport: @escaping (URL) -> Void) {
         self.originalImage = image
@@ -346,6 +427,116 @@ final class EditorDocument: ObservableObject {
         }
         history.commit(next)
         status = annotation.tool == .crop ? "已裁剪；可撤销恢复完整图像。" : "已添加\(annotation.tool.title)。"
+    }
+
+    func rotateClockwise() {
+        var next = history.current
+        next.rotationQuarterTurns = (next.rotationQuarterTurns + 1) % 4
+        history.commit(next); status = "图像已顺时针旋转 90°。"
+    }
+
+    func setImageScale(_ value: Double) {
+        var next = history.current
+        next.imageScale = CGFloat(value)
+        history.commit(next); status = "输出缩放已设为 \(Int(value * 100))%。"
+    }
+
+    func requestText(at point: CGPoint) {
+        pendingTextPoint = point; text = ""; showsTextEntry = true
+    }
+
+    func commitPendingText() {
+        guard let point = pendingTextPoint else { return }
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { showsTextEntry = false; pendingTextPoint = nil; return }
+        commit(EditorAnnotation(tool: .text, points: [point], color: color, width: strokeWidth,
+                                text: value, fontSize: fontSize, isBold: isBold))
+        showsTextEntry = false; pendingTextPoint = nil; text = ""
+    }
+
+    func importSticker(window: NSWindow?) {
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .heic]
+        panel.allowsMultipleSelection = false; panel.title = "选择自定义贴图"
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url, let self,
+                  let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return }
+            let crop = self.history.current.cropBounds
+            let maxSide = min(crop.width, crop.height) * 0.4 * self.stickerScale
+            let ratio = min(1, maxSide / max(CGFloat(image.width), CGFloat(image.height)))
+            let size = CGSize(width: CGFloat(image.width) * ratio, height: CGFloat(image.height) * ratio)
+            let origin = CGPoint(x: crop.midX - size.width / 2, y: crop.midY - size.height / 2)
+            self.commit(EditorAnnotation(tool: .image, points: [origin, CGPoint(x: origin.x + size.width, y: origin.y + size.height)],
+                                         color: .clear, width: 0, embeddedImage: image, rotationDegrees: self.stickerRotation))
+            self.selectedStickerIndex = self.history.current.annotations.count - 1
+            self.status = "贴图已导入，可继续调整大小和旋转角度。"
+        }
+        if let window { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }
+    }
+
+    func setStickerScale(_ value: Double) {
+        let clamped = min(2, max(0.25, value))
+        let previous = stickerScale
+        stickerScale = clamped
+        guard let index = selectedStickerIndex,
+              history.current.annotations.indices.contains(index),
+              history.current.annotations[index].tool == .image,
+              previous > 0 else { return }
+        var next = history.current
+        let annotation = next.annotations[index]
+        let center = CGPoint(x: annotation.bounds.midX, y: annotation.bounds.midY)
+        let factor = CGFloat(clamped / previous)
+        let halfWidth = annotation.bounds.width * factor / 2
+        let halfHeight = annotation.bounds.height * factor / 2
+        next.annotations[index].points = [CGPoint(x: center.x - halfWidth, y: center.y - halfHeight),
+                                          CGPoint(x: center.x + halfWidth, y: center.y + halfHeight)]
+        history.commit(next)
+        status = "贴图大小已调整为 (Int(clamped * 100))%。"
+    }
+
+    func setStickerRotation(_ value: Double) {
+        let clamped = min(180, max(-180, value))
+        stickerRotation = clamped
+        guard let index = selectedStickerIndex,
+              history.current.annotations.indices.contains(index),
+              history.current.annotations[index].tool == .image else { return }
+        var next = history.current
+        next.annotations[index].rotationDegrees = CGFloat(clamped)
+        history.commit(next)
+        status = "贴图已旋转 (Int(clamped))°。"
+    }
+
+    func recognizeQR() {
+        guard !isRecognizing, !isExporting else { return }
+        isRecognizing = true; let snapshot = history.current
+        Task { [weak self, originalImage] in
+            do {
+                let image = try await EditorRenderWorker.image(originalImage, snapshot: snapshot)
+                let values = try await EditorBarcode.recognize(image: image)
+                self?.qrResults = values; self?.showsQR = true; self?.isRecognizing = false
+                self?.status = values.isEmpty ? "未识别到二维码。" : "已识别 \(values.count) 个二维码。"
+            } catch { self?.isRecognizing = false; self?.errorMessage = "二维码识别失败：\(error.localizedDescription)" }
+        }
+    }
+
+    func encodeBase64() {
+        guard !isExporting else { return }; isExporting = true; let snapshot = history.current
+        Task { [weak self, originalImage] in
+            do { self?.base64Text = try await EditorRenderWorker.png(originalImage, snapshot: snapshot).base64EncodedString(); self?.base64ModeIsDecode = false; self?.showsBase64 = true; self?.isExporting = false }
+            catch { self?.isExporting = false; self?.errorMessage = error.localizedDescription }
+        }
+    }
+
+    func decodeBase64(window: NSWindow?) {
+        let cleaned = base64Text.components(separatedBy: .whitespacesAndNewlines).joined()
+        guard let data = Data(base64Encoded: cleaned), let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { errorMessage = "Base64 不是可识别的图片数据。"; return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.png]; panel.nameFieldStringValue = "Base64-图片.png"
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            do { try EditorRenderer.save(image: image, to: url, jpeg: false) } catch { self.errorMessage = error.localizedDescription }
+        }
+        if let window { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }
     }
 
     func undo() { guard history.canUndo else { return }; history.undo(); status = "已撤销。" }

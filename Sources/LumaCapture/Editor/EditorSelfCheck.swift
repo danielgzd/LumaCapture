@@ -16,6 +16,20 @@ enum EditorSelfCheck {
               try pixel(in: topCrop, x: 2, y: 1) == pixel(in: orientationSource, x: 2, y: 1) else {
             throw EditorError.selfCheck("原图或顶部裁剪发生垂直翻转")
         }
+        var transformedSnapshot = EditorSnapshot(cropBounds: CGRect(x: 0, y: 0, width: 8, height: 4))
+        transformedSnapshot.rotationQuarterTurns = 1
+        transformedSnapshot.imageScale = 0.5
+        let transformed = try EditorRenderer.render(image: orientationSource, snapshot: transformedSnapshot)
+        guard transformed.width == 2, transformed.height == 4 else {
+            throw EditorError.selfCheck("旋转缩放尺寸不正确：\(transformed.width) × \(transformed.height)")
+        }
+        var mosaicSnapshot = EditorSnapshot(cropBounds: CGRect(x: 0, y: 0, width: 8, height: 8))
+        mosaicSnapshot.annotations = [EditorAnnotation(tool: .redact,
+            points: [.zero, CGPoint(x: 8, y: 8)], color: .black, width: 1)]
+        let mosaic = try EditorRenderer.render(image: orientationSource, snapshot: mosaicSnapshot)
+        guard try pixel(in: mosaic, x: 2, y: 1) != pixel(in: orientationSource, x: 2, y: 1) else {
+            throw EditorError.selfCheck("马赛克没有降低原图细节")
+        }
         let size = CGSize(width: 520, height: 180)
         guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height),
                                       bitsPerComponent: 8, bytesPerRow: 0,
@@ -48,8 +62,8 @@ enum EditorSelfCheck {
             throw EditorError.selfCheck("无法创建像素检查画布")
         }
         pixelContext.draw(redactionPixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        guard pixel[0] < 4, pixel[1] < 4, pixel[2] < 4, pixel[3] > 250 else {
-            throw EditorError.selfCheck("隐私遮挡没有生成不透明黑色像素")
+        guard pixel[3] > 250 else {
+            throw EditorError.selfCheck("马赛克区域没有生成不透明像素")
         }
 
         let png = outputDirectory.appendingPathComponent("editor-self-check.png")
@@ -66,7 +80,8 @@ enum EditorSelfCheck {
 
         var checks = [
             "PASS source orientation and top-left crop pixel fidelity",
-            "PASS editor crop, annotation and opaque-redaction rendering",
+            "PASS image rotation, scaling and true mosaic downsampling",
+            "PASS editor crop, annotation and mosaic rendering",
             "PASS PNG and JPEG export/readback at source pixel dimensions"
         ]
         do {

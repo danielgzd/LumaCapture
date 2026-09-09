@@ -3,12 +3,24 @@ import AppKit
 import LumaCaptureCore
 
 private let mint = Color(red: 0.50, green: 0.91, blue: 0.78)
-private let surface = Color(red: 0.105, green: 0.12, blue: 0.14)
+private let surface = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.105, green: 0.12, blue: 0.14, alpha: 1) : NSColor(red: 0.94, green: 0.95, blue: 0.96, alpha: 1)
+})
+private let canvas = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.065, green: 0.077, blue: 0.09, alpha: 1) : NSColor(red: 0.98, green: 0.985, blue: 0.99, alpha: 1)
+})
+private let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"
+
+private enum WorkspaceMode {
+    case screenshot
+    case recording
+}
 
 struct DashboardView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var capture: CaptureService
     @Environment(\.scenePhase) private var phase
+    @State private var workspaceMode: WorkspaceMode = .screenshot
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -28,8 +40,8 @@ struct DashboardView: View {
             }
         }
         .frame(minWidth: 940, minHeight: 650)
-        .background(Color(red: 0.065, green: 0.077, blue: 0.09))
-        .preferredColorScheme(.dark)
+        .background(canvas)
+        .preferredColorScheme(model.preferredColorScheme)
         .tint(mint)
         .alert("操作未完成", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("知道了") { model.error = nil }
@@ -54,13 +66,13 @@ struct DashboardView: View {
                 Text("只留在你的 Mac").font(.system(size: 13, weight: .semibold))
                 Text("本地捕获 · 本地识别\n没有账户，没有上传").font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(5)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(surface, in: RoundedRectangle(cornerRadius: 14))
-            HStack { Text("LumaCapture"); Spacer(); Text("v0.1.0") }.font(.system(size: 10)).foregroundStyle(.tertiary)
+            HStack { Text("© Daniel · LumaCapture"); Spacer(); Text("v\(appVersion)") }.font(.system(size: 10)).foregroundStyle(.tertiary)
         }.padding(20).frame(width: 208).background(Color.black.opacity(0.18))
     }
     private func nav(_ id: String, title: String, symbol: String) -> some View {
         Button { model.selectedTab = id } label: {
             HStack(spacing: 12) { Image(systemName: symbol).frame(width: 20); Text(title); Spacer(); if id == "library" { Text("\(model.records.count)").font(.caption).foregroundStyle(.secondary) } }
-                .font(.system(size: 13, weight: .medium)).padding(.horizontal, 14).padding(.vertical, 13)
+                .font(.system(size: 13, weight: .medium)).padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 46)
                 .background(model.selectedTab == id ? mint.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
                 .foregroundStyle(model.selectedTab == id ? mint : .secondary)
         }.buttonStyle(.plain)
@@ -90,9 +102,18 @@ struct DashboardView: View {
     }
     private var capturePage: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 16) {
-                actionCard(title: "截取画面", subtitle: "定格细节，再标注你的想法", symbol: "camera.viewfinder", key: "⌘ ⇧ 2", primary: true) { model.takeScreenshot() }
-                actionCard(title: "录制屏幕", subtitle: "画面、系统声音与麦克风", symbol: "record.circle", key: "⌘ ⇧ 6", primary: false) { model.startRecording() }
+            VStack(alignment: .leading, spacing: 14) {
+                sectionTitle("开始捕获", detail: "CAPTURE")
+                HStack(spacing: 12) {
+                    workspaceCard(.screenshot, title: "截取画面", subtitle: "截图后直接标注", symbol: "camera.viewfinder", key: model.screenshotHotkey.displayName)
+                    workspaceCard(.recording, title: "录制屏幕", subtitle: "画面与声音", symbol: "record.circle", key: model.recordingHotkey.displayName)
+                    Button { model.importImage() } label: {
+                        workspaceCardContent(title: "导入图片", subtitle: "打开已有图片", symbol: "square.and.arrow.down", key: nil, selected: false)
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(RoundedRectangle(cornerRadius: 16))
+                    .disabled(model.isWorking)
+                }
             }
             VStack(alignment: .leading, spacing: 18) {
                 sectionTitle("捕获来源", detail: "显示器 / 应用窗口")
@@ -102,10 +123,10 @@ struct DashboardView: View {
                         Section("显示器") { ForEach(capture.displays) { Text($0.name).tag($0.id) } }
                         Section("窗口") { ForEach(capture.windows) { Text($0.name).tag($0.id) } }
                     }.labelsHidden().frame(maxWidth: .infinity).disabled(model.isWorking)
-                    Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("刷新显示器和窗口").disabled(model.isWorking)
+                    Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28) }.help("刷新显示器和窗口").disabled(model.isWorking)
                 }
                 HStack {
-                    Picker("范围", selection: $model.useRegion) { Text("拖选区域").tag(true); Text("完整画面").tag(false) }.pickerStyle(.segmented).frame(width: 250).disabled(model.target?.isWindow == true || model.isWorking)
+                    Picker("范围", selection: $model.useRegion) { Text("拖选区域").tag(true); Text("完整画面").tag(false) }.pickerStyle(.segmented).controlSize(.large).frame(width: 280).frame(minHeight: 36).disabled(model.target?.isWindow == true || model.isWorking)
                     Spacer()
                     Toggle("显示光标", isOn: $model.showsCursor).toggleStyle(.checkbox).font(.callout).disabled(model.isWorking)
                 }
@@ -116,25 +137,49 @@ struct DashboardView: View {
                     Spacer()
                     Picker("帧率", selection: $model.recordingFPS) { Text("30 fps").tag(30); Text("60 fps").tag(60) }.frame(width: 140)
                 }.font(.callout).disabled(model.isWorking)
+                Button {
+                    if workspaceMode == .screenshot { model.takeScreenshot() }
+                    else { model.startRecording() }
+                } label: {
+                    Label(workspaceMode == .screenshot ? "开始截取画面" : "开始录制屏幕",
+                          systemImage: workspaceMode == .screenshot ? "camera.fill" : "record.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 30)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.isWorking || !model.permissionGranted)
             }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 18))
             if model.busy && !capture.isRecording {
                 HStack { ProgressView().controlSize(.small); Text(model.countdown.map { "\($0) 秒后开始，可从菜单栏取消" } ?? "正在处理捕获…"); Spacer(); if model.countdown != nil { Button("取消") { model.cancelPending() } } }.font(.callout)
             }
             HStack { sectionTitle("最近捕获", detail: "RECENT"); Spacer(); Button("查看全部 →") { model.selectedTab = "library" }.buttonStyle(.plain).font(.caption).foregroundStyle(mint) }
             if model.records.isEmpty { emptyLibrary } else { ForEach(model.records.prefix(3)) { recordRow($0) } }
-            Button { model.importImage() } label: { Label("也可以导入图片，直接开始标注", systemImage: "square.and.arrow.down") }.buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
         }
     }
-    private func actionCard(title: String, subtitle: String, symbol: String, key: String, primary: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack { Image(systemName: symbol).font(.system(size: 29, weight: .light)); Spacer(); Text(key).font(.system(size: 11, weight: .medium, design: .monospaced)).padding(.horizontal, 9).padding(.vertical, 6).background((primary ? Color.black : Color.white).opacity(0.08), in: RoundedRectangle(cornerRadius: 6)) }
-                VStack(alignment: .leading, spacing: 6) { Text(title).font(.system(size: 23, weight: .semibold)); Text(subtitle).font(.system(size: 12)).opacity(0.65) }
-                HStack { Text("开始\(primary ? "截图" : "录制")").font(.system(size: 12, weight: .medium)); Spacer(); Image(systemName: "arrow.up.right") }
-            }.padding(24).frame(maxWidth: .infinity, alignment: .leading).frame(height: 190)
-                .foregroundStyle(primary ? Color(red: 0.045, green: 0.17, blue: 0.14) : .white)
-                .background(primary ? AnyShapeStyle(LinearGradient(colors: [mint, Color(red: 0.62, green: 0.88, blue: 0.70)], startPoint: .topLeading, endPoint: .bottomTrailing)) : AnyShapeStyle(surface), in: RoundedRectangle(cornerRadius: 19))
-        }.buttonStyle(.plain).disabled(model.isWorking || !model.permissionGranted).opacity(model.isWorking ? 0.5 : 1)
+    private func workspaceCard(_ mode: WorkspaceMode, title: String, subtitle: String, symbol: String, key: String) -> some View {
+        Button { workspaceMode = mode } label: {
+            workspaceCardContent(title: title, subtitle: subtitle, symbol: symbol, key: key, selected: workspaceMode == mode)
+        }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .disabled(model.isWorking)
+    }
+    private func workspaceCardContent(title: String, subtitle: String, symbol: String, key: String?, selected: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Image(systemName: symbol).font(.system(size: 24, weight: .medium))
+                Spacer()
+                if let key { Text(key).font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(.secondary) }
+            }
+            Text(title).font(.system(size: 16, weight: .semibold))
+            Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
+        .background(selected ? mint.opacity(0.13) : surface, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? mint : .white.opacity(0.07), lineWidth: selected ? 1.5 : 1))
+        .foregroundStyle(selected ? mint : .primary)
     }
     private var recordingCard: some View {
         HStack(spacing: 16) {
@@ -191,16 +236,46 @@ struct DashboardView: View {
             }
             settingGroup("快捷键与权限") {
                 Toggle("启用全局快捷键", isOn: $model.hotkeysEnabled).onChange(of: model.hotkeysEnabled) { _, _ in model.configureHotkeys() }
-                HStack { Text("区域截图"); Spacer(); Text("⌘ ⇧ 2").monospaced() }
-                HStack { Text("开始 / 停止录屏"); Spacer(); Text("⌘ ⇧ 6").monospaced() }
+                shortcutRow("区域截图", key: $model.screenshotHotkeyKey)
+                shortcutRow("开始 / 停止录屏", key: $model.recordingHotkeyKey)
+                HStack(spacing: 15) {
+                    Text("组合键"); Spacer()
+                    Toggle("⌘", isOn: $model.hotkeyUsesCommand)
+                    Toggle("⇧", isOn: $model.hotkeyUsesShift)
+                    Toggle("⌥", isOn: $model.hotkeyUsesOption)
+                    Toggle("⌃", isOn: $model.hotkeyUsesControl)
+                }.toggleStyle(.checkbox)
+                .onChange(of: model.hotkeyUsesCommand) { _, _ in model.normalizeAndConfigureHotkeys() }
+                .onChange(of: model.hotkeyUsesShift) { _, _ in model.normalizeAndConfigureHotkeys() }
+                .onChange(of: model.hotkeyUsesOption) { _, _ in model.normalizeAndConfigureHotkeys() }
+                .onChange(of: model.hotkeyUsesControl) { _, _ in model.normalizeAndConfigureHotkeys() }
                 if let error = model.hotkeyError { Text(error).font(.caption).foregroundStyle(.orange) }
                 HStack { Button("屏幕录制权限") { CapturePermissions.openScreenRecordingSettings() }; Button("麦克风权限") { CapturePermissions.openMicrophoneSettings() } }
             }
-            Text("LumaCapture 0.1.0 · macOS 15+ · Apple Silicon / Intel\n原生构建，本地处理。源码采用 MIT 许可证。").font(.caption).foregroundStyle(.secondary).lineSpacing(5)
+            settingGroup("启动与外观") {
+                Toggle("登录 Mac 时自动启动", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                Toggle("启动时静默驻留菜单栏", isOn: $model.silentLaunch)
+                Picker("界面风格", selection: $model.appearanceMode) {
+                    Text("跟随系统").tag("system"); Text("亮色").tag("light"); Text("暗黑").tag("dark")
+                }.onChange(of: model.appearanceMode) { _, _ in model.applyAppearance() }
+                if let error = model.launchAtLoginError { Text(error).font(.caption).foregroundStyle(.orange) }
+            }
+            Text("LumaCapture \(appVersion) · © Daniel · macOS 15+ · Apple Silicon / Intel\n原生构建，本地处理。源码采用 MIT 许可证。").font(.caption).foregroundStyle(.secondary).lineSpacing(5)
         }.disabled(model.isWorking)
     }
     private func settingGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 17) { Text(title).font(.system(size: 15, weight: .semibold)); Divider(); content().font(.system(size: 12)) }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 16))
+    }
+    private func shortcutRow(_ title: String, key: Binding<String>) -> some View {
+        HStack {
+            Text(title); Spacer()
+            TextField("字母或数字", text: key).multilineTextAlignment(.center).monospaced().frame(width: 90)
+                .onSubmit { model.normalizeAndConfigureHotkeys() }
+                .onChange(of: key.wrappedValue) { _, newValue in
+                    if newValue.count > 1 { key.wrappedValue = String(newValue.suffix(1)) }
+                    model.normalizeAndConfigureHotkeys()
+                }
+        }
     }
     private func sectionTitle(_ title: String, detail: String) -> some View {
         HStack(spacing: 10) { Text(title).font(.system(size: 14, weight: .semibold)); Text(detail).font(.system(size: 9, weight: .medium)).tracking(1).foregroundStyle(.tertiary) }

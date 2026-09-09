@@ -65,7 +65,9 @@ final class EditorCanvasView: NSView {
     required init?(coder: NSCoder) { nil }
 
     func updateLayout(viewport: NSSize) {
-        let size = document.history.current.cropBounds.size
+        let cropSize = document.history.current.cropBounds.size
+        let turns = normalizedTurns
+        let size = turns.isMultiple(of: 2) ? cropSize : NSSize(width: cropSize.height, height: cropSize.width)
         guard size.width > 0, size.height > 0, viewport.width > 0, viewport.height > 0 else { return }
         let fit = max(0.01, min((viewport.width - 48) / size.width, (viewport.height - 48) / size.height))
         scale = document.zoom == 0 ? min(fit, 1) : document.zoom
@@ -81,7 +83,7 @@ final class EditorCanvasView: NSView {
 
     override func resetCursorRects() {
         super.resetCursorRects()
-        addCursorRect(imageFrame, cursor: document.tool == .text ? .iBeam : .crosshair)
+        addCursorRect(imageFrame, cursor: document.tool == .text ? .iBeam : (document.tool == nil ? .arrow : .crosshair))
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -102,16 +104,16 @@ final class EditorCanvasView: NSView {
             cachedSource = source
             sourceRepresentation = NSImage(cgImage: source, size: NSSize(width: document.originalImage.width, height: document.originalImage.height))
         }
-        let sourceFrame = CGRect(x: imageFrame.minX - crop.minX * scale, y: imageFrame.minY - crop.minY * scale,
-                                 width: CGFloat(document.originalImage.width) * scale, height: CGFloat(document.originalImage.height) * scale)
-        sourceRepresentation?.draw(in: sourceFrame, from: .zero, operation: .sourceOver, fraction: 1,
-                                   respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
         if let context = NSGraphicsContext.current?.cgContext {
             context.saveGState()
             context.translateBy(x: imageFrame.minX, y: imageFrame.minY)
             context.scaleBy(x: scale, y: scale)
+            context.concatenate(displayTransform(cropSize: crop.size))
             context.translateBy(x: -crop.minX, y: -crop.minY)
-            EditorRenderer.draw(annotations: document.history.current.annotations, in: context)
+            sourceRepresentation?.draw(in: CGRect(x: 0, y: 0, width: document.originalImage.width, height: document.originalImage.height),
+                                       from: .zero, operation: .sourceOver, fraction: 1,
+                                       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+            EditorRenderer.draw(annotations: document.history.current.annotations, sourceImage: document.originalImage, in: context)
             if let draft, draft.tool == .crop {
                 let selected = draft.bounds.intersection(crop)
                 context.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
@@ -124,7 +126,7 @@ final class EditorCanvasView: NSView {
                 context.setLineDash(phase: 0, lengths: [6 / scale, 4 / scale])
                 context.stroke(selected)
             } else if let draft {
-                EditorRenderer.draw(annotations: [draft], in: context)
+                EditorRenderer.draw(annotations: [draft], sourceImage: document.originalImage, in: context)
             }
             context.restoreGState()
         }
@@ -137,23 +139,47 @@ final class EditorCanvasView: NSView {
         let local = convert(event.locationInWindow, from: nil)
         guard clamp || imageFrame.contains(local) else { return nil }
         let crop = document.history.current.cropBounds
-        return CGPoint(x: min(crop.maxX, max(crop.minX, (local.x - imageFrame.minX) / scale + crop.minX)),
-                       y: min(crop.maxY, max(crop.minY, (local.y - imageFrame.minY) / scale + crop.minY)))
+        let displayed = CGPoint(x: (local.x - imageFrame.minX) / scale,
+                                y: (local.y - imageFrame.minY) / scale)
+        let source: CGPoint
+        switch normalizedTurns {
+        case 1: source = CGPoint(x: displayed.y, y: crop.height - displayed.x)
+        case 2: source = CGPoint(x: crop.width - displayed.x, y: crop.height - displayed.y)
+        case 3: source = CGPoint(x: crop.width - displayed.y, y: displayed.x)
+        default: source = displayed
+        }
+        return CGPoint(x: min(crop.maxX, max(crop.minX, source.x + crop.minX)),
+                       y: min(crop.maxY, max(crop.minY, source.y + crop.minY)))
+    }
+
+    private var normalizedTurns: Int {
+        let turns = document.history.current.rotationQuarterTurns % 4
+        return turns >= 0 ? turns : turns + 4
+    }
+
+    /// Maps top-left source coordinates to the clockwise-rotated canvas.
+    private func displayTransform(cropSize: CGSize) -> CGAffineTransform {
+        switch normalizedTurns {
+        case 1: return CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: cropSize.height, ty: 0)
+        case 2: return CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: cropSize.width, ty: cropSize.height)
+        case 3: return CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: cropSize.width)
+        default: return .identity
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         guard let start = point(for: event, clamp: false) else { return }
-        var annotation = EditorAnnotation(tool: document.tool, points: [start], color: document.color,
-                                          width: document.strokeWidth, text: document.text, fontSize: document.fontSize)
-        if document.tool == .text {
-            guard !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                document.status = "请先在工具栏输入要添加的文字。"
-                return
-            }
-            document.commit(annotation)
+        guard let tool = document.tool else { return }
+        var annotation = EditorAnnotation(tool: tool, points: [start], color: document.color,
+                                          width: document.strokeWidth, text: document.text, fontSize: document.fontSize,
+                                          isBold: document.isBold, cornerRadius: document.rectangleCornerRadius)
+        if tool == .text {
+            document.requestText(at: start)
+        } else if tool == .image {
+            document.status = "请点击工具栏中的“导入贴图”。"
         } else {
-            if document.tool != .pen { annotation.points.append(start) }
+            if tool != .pen { annotation.points.append(start) }
             else {
                 let path = CGMutablePath()
                 path.move(to: start)
@@ -175,10 +201,12 @@ final class EditorCanvasView: NSView {
             let margin = (draft?.width ?? 6) / 2 + 2 / scale
             let changed = CGRect(x: min(position.x, previous.x), y: min(position.y, previous.y),
                                  width: abs(position.x - previous.x), height: abs(position.y - previous.y)).insetBy(dx: -margin, dy: -margin)
-            let crop = document.history.current.cropBounds
-            setNeedsDisplay(CGRect(x: imageFrame.minX + (changed.minX - crop.minX) * scale,
-                                   y: imageFrame.minY + (changed.minY - crop.minY) * scale,
-                                   width: changed.width * scale, height: changed.height * scale))
+            if normalizedTurns == 0 {
+                let crop = document.history.current.cropBounds
+                setNeedsDisplay(CGRect(x: imageFrame.minX + (changed.minX - crop.minX) * scale,
+                                       y: imageFrame.minY + (changed.minY - crop.minY) * scale,
+                                       width: changed.width * scale, height: changed.height * scale))
+            } else { needsDisplay = true }
         } else {
             if let count = draft?.points.count, count > 0 { draft?.points[count - 1] = position }
             needsDisplay = true
@@ -203,6 +231,7 @@ final class EditorCanvasView: NSView {
         switch annotation.tool {
         case .pen: valid = true
         case .arrow: valid = hypot(annotation.bounds.width, annotation.bounds.height) >= 2
+        case .text, .image: valid = false
         default: valid = annotation.bounds.width >= 2 && annotation.bounds.height >= 2
         }
         if valid { document.commit(annotation) }

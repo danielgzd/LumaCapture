@@ -7,7 +7,7 @@ import CoreGraphics
 enum RegionSelector {
     private static var active: RegionSelectionController?
 
-    static func select(displayID: CGDirectDisplayID) async -> CGRect? {
+    static func select(displayID: CGDirectDisplayID, confirmationTitle: String = "使用此区域") async -> CGRect? {
         active?.cancel()
         guard !Task.isCancelled else { return nil }
         guard let screen = NSScreen.screens.first(where: { $0.captureDisplayID == displayID }) else { return nil }
@@ -20,6 +20,7 @@ enum RegionSelector {
                     continuation.resume(returning: result)
                 }
                 active = controller
+                controller.confirmationTitle = confirmationTitle
                 controller.present()
             }
         } onCancel: {
@@ -39,6 +40,9 @@ private final class RegionSelectionController {
     private var keyMonitor: Any?
     private var screenObserver: NSObjectProtocol?
     private var deactivateObserver: NSObjectProtocol?
+    var confirmationTitle = "使用此区域" {
+        didSet { (window.contentView as? RegionSelectionView)?.confirmationTitle = confirmationTitle }
+    }
     private lazy var window: RegionSelectionWindow = {
         let window = RegionSelectionWindow(contentRect: screen.frame,
                                            styleMask: [.borderless], backing: .buffered,
@@ -51,6 +55,7 @@ private final class RegionSelectionController {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.ignoresMouseEvents = false
         let view = RegionSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        view.confirmationTitle = confirmationTitle
         view.onComplete = { [weak self] rect in self?.finish(rect) }
         window.contentView = view
         return window
@@ -115,8 +120,11 @@ private final class RegionSelectionWindow: NSWindow {
 
 private final class RegionSelectionView: NSView {
     var onComplete: ((CGRect?) -> Void)?
+    var confirmationTitle = "使用此区域"
     private var start: CGPoint?
     private var selection: CGRect?
+    private var confirmButtonRect: CGRect = .zero
+    private var cancelButtonRect: CGRect = .zero
 
     override var acceptsFirstResponder: Bool { true }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
@@ -146,8 +154,12 @@ private final class RegionSelectionView: NSView {
             let preferredY = selection.maxY + 8
             let y = preferredY + size.height < bounds.maxY ? preferredY : max(8, selection.minY - size.height - 8)
             label.draw(at: CGPoint(x: x + 5, y: y + 3), withAttributes: attributes)
+
+            drawActionBar(for: selection)
         } else {
-            let hint = "拖动选择区域  ·  Esc 取消"
+            confirmButtonRect = .zero
+            cancelButtonRect = .zero
+            let hint = "拖动选择区域  ·  回车确认  ·  Esc 取消"
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 15, weight: .medium),
                 .foregroundColor: NSColor.white
@@ -160,6 +172,14 @@ private final class RegionSelectionView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if confirmButtonRect.contains(point), let selection {
+            onComplete?(selection)
+            return
+        }
+        if cancelButtonRect.contains(point) {
+            onComplete?(nil)
+            return
+        }
         start = point
         selection = CGRect(origin: point, size: .zero)
         needsDisplay = true
@@ -183,13 +203,46 @@ private final class RegionSelectionView: NSView {
             needsDisplay = true
             return
         }
-        onComplete?(result)
+        selection = result
+        needsDisplay = true
     }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onComplete?(nil) }
+        else if event.keyCode == 36 || event.keyCode == 76 {
+            if let selection { onComplete?(selection) }
+        }
         else { super.keyDown(with: event) }
     }
 
     override func rightMouseDown(with event: NSEvent) { onComplete?(nil) }
+
+    private func drawActionBar(for selection: CGRect) {
+        let barSize = CGSize(width: 220, height: 48)
+        let preferredX = selection.midX - barSize.width / 2
+        let x = min(max(12, preferredX), max(12, bounds.maxX - barSize.width - 12))
+        let below = selection.minY - barSize.height - 12
+        let y = below >= 12 ? below : min(bounds.maxY - barSize.height - 12, selection.maxY + 12)
+        let barRect = CGRect(origin: CGPoint(x: x, y: y), size: barSize)
+
+        NSColor.black.withAlphaComponent(0.82).setFill()
+        NSBezierPath(roundedRect: barRect, xRadius: 12, yRadius: 12).fill()
+
+        cancelButtonRect = CGRect(x: barRect.minX + 8, y: barRect.minY + 7, width: 76, height: 34)
+        confirmButtonRect = CGRect(x: barRect.maxX - 128, y: barRect.minY + 7, width: 120, height: 34)
+        drawButton("取消", in: cancelButtonRect, fill: NSColor.white.withAlphaComponent(0.10), foreground: .white)
+        drawButton(confirmationTitle, in: confirmButtonRect, fill: NSColor(calibratedRed: 0.50, green: 0.91, blue: 0.78, alpha: 1), foreground: .black)
+    }
+
+    private func drawButton(_ title: String, in rect: CGRect, fill: NSColor, foreground: NSColor) {
+        fill.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: foreground
+        ]
+        let size = title.size(withAttributes: attributes)
+        title.draw(at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+                   withAttributes: attributes)
+    }
 }

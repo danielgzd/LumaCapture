@@ -82,6 +82,12 @@ private struct EditorRootView: View {
                 }
                 .disabled(document.isRecognizing || document.isExporting)
                 .help("使用本机 Vision 识别中文和英文")
+                Button(action: document.recognizeQR) { Label("二维码", systemImage: "qrcode.viewfinder") }
+                    .disabled(document.isRecognizing || document.isExporting)
+                Menu {
+                    Button("图片转 Base64") { document.encodeBase64() }
+                    Button("Base64 转图片") { document.base64Text = ""; document.base64ModeIsDecode = true; document.showsBase64 = true }
+                } label: { Label("转换", systemImage: "arrow.left.arrow.right") }
                 Button(action: onPin) { Label("贴图", systemImage: "pin") }
                     .disabled(document.isRecognizing || document.isExporting)
                     .help("将当前编辑结果显示在置顶参考窗")
@@ -115,7 +121,7 @@ private struct EditorRootView: View {
                         .background(document.tool == tool ? Color.mint : Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
-                    .help(tool == .redact ? "拖动添加不透明黑色遮挡" : tool == .crop ? "拖选区域，松开应用裁剪；可撤销" : tool.title)
+                    .help(tool == .redact ? "拖动添加不可逆马赛克" : tool == .crop ? "拖选区域，松开应用裁剪；可撤销" : tool.title)
                     .accessibilityLabel(tool.title)
                     .accessibilityAddTraits(document.tool == tool ? .isSelected : [])
                 }
@@ -132,6 +138,10 @@ private struct EditorRootView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel(colorName(color))
                     }
+                    ColorPicker("自定义", selection: Binding(
+                        get: { Color(nsColor: document.color) },
+                        set: { document.color = NSColor($0) }
+                    )).labelsHidden().help("选择自定义颜色")
                 }
                 .opacity(document.tool == .redact || document.tool == .crop ? 0.4 : 1)
                 .disabled(document.tool == .redact || document.tool == .crop)
@@ -148,24 +158,45 @@ private struct EditorRootView: View {
             .padding(.horizontal, 20).padding(.vertical, 10)
 
             HStack(spacing: 12) {
-                if document.tool == .text {
-                    TextField("要添加的文字", text: $document.text)
-                        .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
+                if document.tool == nil {
+                    Text("未选择编辑工具").foregroundStyle(.secondary)
+                } else if document.tool == .text {
                     Text("字号").foregroundStyle(.secondary)
                     Slider(value: $document.fontSize, in: 14...100, step: 2).frame(width: 105)
                     Text("\(Int(document.fontSize)) px").monospacedDigit().frame(width: 48, alignment: .leading)
-                    Text("点击图像放置").foregroundStyle(.secondary)
+                    Toggle("粗体", isOn: $document.isBold).toggleStyle(.checkbox)
+                    Text("点击图像后输入文字").foregroundStyle(.secondary)
+                } else if document.tool == .rectangle {
+                    Text("线宽").foregroundStyle(.secondary)
+                    Slider(value: $document.strokeWidth, in: 2...32, step: 1).frame(width: 100)
+                    Text("圆角").foregroundStyle(.secondary)
+                    Slider(value: $document.rectangleCornerRadius, in: 0...80, step: 2).frame(width: 110)
+                    Text("\(Int(document.rectangleCornerRadius)) px").monospacedDigit()
+                } else if document.tool == .image {
+                    Button("导入贴图…") { document.importSticker(window: NSApp.keyWindow) }
+                    Text("大小").foregroundStyle(.secondary)
+                    Slider(value: Binding(get: { document.stickerScale }, set: document.setStickerScale),
+                           in: 0.25...2, step: 0.05).frame(width: 100)
+                    Text("旋转").foregroundStyle(.secondary)
+                    Slider(value: Binding(get: { document.stickerRotation }, set: document.setStickerRotation),
+                           in: -180...180, step: 1).frame(width: 100)
                 } else if [.pen, .arrow, .rectangle, .ellipse].contains(document.tool) {
                     Text("线宽").foregroundStyle(.secondary)
                     Slider(value: $document.strokeWidth, in: 2...32, step: 1).frame(width: 130)
                     Text("\(Int(document.strokeWidth)) px").monospacedDigit().frame(width: 42, alignment: .leading)
                     Text("在图像上拖动绘制 · Esc 取消").foregroundStyle(.secondary)
                 } else {
-                    Text(document.tool == .redact ? "拖动覆盖敏感信息，导出后遮挡区域为不透明黑色。" :
+                    Text(document.tool == .redact ? "拖动覆盖敏感信息，导出后区域会写入不可逆马赛克像素。" :
                          document.tool == .crop ? "拖选保留区域，松开应用；撤销可恢复。" : "拖动矩形区域添加半透明高亮。")
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
+                Button { document.rotateClockwise() } label: { Label("旋转 90°", systemImage: "rotate.right") }
+                Menu("图像大小") {
+                    ForEach([0.5, 0.75, 1.0, 1.5, 2.0], id: \.self) { value in
+                        Button("\(Int(value * 100))%") { document.setImageScale(value) }
+                    }
+                }
                 Picker("缩放", selection: $document.zoom) {
                     Text("适应窗口").tag(0.0)
                     Text("50%").tag(0.5)
@@ -188,12 +219,39 @@ private struct EditorRootView: View {
             .font(.caption).padding(.horizontal, 20).padding(.vertical, 11)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .preferredColorScheme(.dark)
         .tint(.mint)
         .sheet(isPresented: $document.showsOCR) { ocrSheet }
+        .sheet(isPresented: $document.showsQR) { qrSheet }
+        .sheet(isPresented: $document.showsBase64) { base64Sheet }
+        .sheet(isPresented: $document.showsTextEntry) { textEntrySheet }
         .alert("操作未完成", isPresented: Binding(get: { document.errorMessage != nil }, set: { if !$0 { document.errorMessage = nil } })) {
             Button("知道了") { document.errorMessage = nil }
         } message: { Text(document.errorMessage ?? "") }
+    }
+
+    private var textEntrySheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("添加文字").font(.title2.bold())
+            TextField("输入文字", text: $document.text, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1...5)
+            HStack { Spacer(); Button("取消") { document.showsTextEntry = false; document.pendingTextPoint = nil }; Button("添加") { document.commitPendingText() }.buttonStyle(.borderedProminent).disabled(document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+        }.padding(24).frame(width: 460)
+    }
+
+    private var qrSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("二维码识别").font(.title2.bold())
+            if document.qrResults.isEmpty { ContentUnavailableView("未识别到二维码", systemImage: "qrcode") }
+            else { List(document.qrResults, id: \.self) { Text($0).textSelection(.enabled) } }
+            HStack { Spacer(); Button("关闭") { document.showsQR = false }; Button("全部复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(document.qrResults.joined(separator: "\n"), forType: .string) }.disabled(document.qrResults.isEmpty) }
+        }.padding(24).frame(width: 600, height: 380)
+    }
+
+    private var base64Sheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(document.base64ModeIsDecode ? "Base64 转图片" : "图片转 Base64").font(.title2.bold())
+            TextEditor(text: $document.base64Text).font(.system(.caption, design: .monospaced)).frame(minHeight: 280).border(.secondary.opacity(0.25))
+            HStack { Spacer(); Button("关闭") { document.showsBase64 = false }; if document.base64ModeIsDecode { Button("保存图片…") { document.decodeBase64(window: NSApp.keyWindow) }.buttonStyle(.borderedProminent) } else { Button("复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(document.base64Text, forType: .string) }.buttonStyle(.borderedProminent) } }
+        }.padding(24).frame(width: 680, height: 430)
     }
 
     private var ocrSheet: some View {
@@ -227,7 +285,7 @@ private struct EditorRootView: View {
                 .buttonStyle(.borderedProminent).disabled(document.ocrText.isEmpty)
             }
         }
-        .padding(24).frame(width: 620).preferredColorScheme(.dark)
+        .padding(24).frame(width: 620)
     }
 
     private func colorName(_ color: NSColor) -> String {

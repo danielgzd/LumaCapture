@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
+import ServiceManagement
 import LumaCaptureCore
 
 @MainActor
@@ -21,6 +22,8 @@ final class AppModel: ObservableObject {
     @Published var selectedTab = "capture"
     @Published var outputDirectory: URL
     @Published var hotkeyError: String?
+    @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var launchAtLoginError: String?
     @AppStorage("showsCursor") var showsCursor = true
     @AppStorage("copyAfterCapture") var copyAfterCapture = true
     @AppStorage("captureDelay") var captureDelay = 0
@@ -30,6 +33,14 @@ final class AppModel: ObservableObject {
     @AppStorage("microphone") var microphone = false
     @AppStorage("maximumDuration") var maximumDuration = 0
     @AppStorage("hotkeysEnabled") var hotkeysEnabled = true
+    @AppStorage("screenshotHotkeyKey") var screenshotHotkeyKey = "2"
+    @AppStorage("recordingHotkeyKey") var recordingHotkeyKey = "6"
+    @AppStorage("hotkeyUsesCommand") var hotkeyUsesCommand = true
+    @AppStorage("hotkeyUsesShift") var hotkeyUsesShift = true
+    @AppStorage("hotkeyUsesOption") var hotkeyUsesOption = false
+    @AppStorage("hotkeyUsesControl") var hotkeyUsesControl = false
+    @AppStorage("silentLaunch") var silentLaunch = true
+    @AppStorage("appearanceMode") var appearanceMode = "system"
     private let repository: HistoryRepository
     private var timerTask: Task<Void, Never>?
     private var operationTask: Task<Void, Never>?
@@ -39,9 +50,9 @@ final class AppModel: ObservableObject {
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         repository = HistoryRepository(fileURL: base.appendingPathComponent("LumaCapture/history.json"))
-        let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures")
+        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
         let saved = UserDefaults.standard.string(forKey: "outputDirectory")
-        outputDirectory = saved.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? pictures.appendingPathComponent("LumaCapture")
+        outputDirectory = saved.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? desktop
         do { records = try repository.load() } catch { self.error = "历史记录读取失败，现有文件不受影响：\(error.localizedDescription)" }
         permissionGranted = CapturePermissions.hasScreenRecordingAccess
     }
@@ -83,7 +94,38 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             if self.capture.isRecording { self.stopRecording() } else { self.startRecording() }
         }
-        do { try instance.register(); hotkeys = instance } catch { hotkeyError = error.localizedDescription }
+        do { try instance.register(screenshot: screenshotHotkey, recording: recordingHotkey); hotkeys = instance } catch { hotkeyError = error.localizedDescription }
+    }
+
+    var screenshotHotkey: HotkeyConfiguration { hotkey(key: screenshotHotkeyKey) }
+    var recordingHotkey: HotkeyConfiguration { hotkey(key: recordingHotkeyKey) }
+    var preferredColorScheme: ColorScheme? { appearanceMode == "light" ? .light : appearanceMode == "dark" ? .dark : nil }
+
+    func applyAppearance() {
+        NSApp.appearance = appearanceMode == "light" ? NSAppearance(named: .aqua) : appearanceMode == "dark" ? NSAppearance(named: .darkAqua) : nil
+    }
+
+    func normalizeAndConfigureHotkeys() {
+        screenshotHotkeyKey = normalizedHotkeyKey(screenshotHotkeyKey, fallback: "2")
+        recordingHotkeyKey = normalizedHotkeyKey(recordingHotkeyKey, fallback: "6")
+        configureHotkeys()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        launchAtLoginError = nil
+        do {
+            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch { launchAtLoginError = "无法更新开机自启：\(error.localizedDescription)" }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    private func hotkey(key: String) -> HotkeyConfiguration {
+        HotkeyConfiguration(key: key, command: hotkeyUsesCommand, shift: hotkeyUsesShift, option: hotkeyUsesOption, control: hotkeyUsesControl)
+    }
+
+    private func normalizedHotkeyKey(_ value: String, fallback: String) -> String {
+        let candidate = String(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().prefix(1))
+        return candidate.range(of: "^[a-z0-9]$", options: .regularExpression) == nil ? fallback : candidate
     }
 
     func takeScreenshot(forceRegion: Bool = false) {
@@ -102,7 +144,7 @@ final class AppModel: ObservableObject {
                 var region: CGRect?
                 if (self.useRegion || forceRegion) && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
-                    guard let chosen = await RegionSelector.select(displayID: displayID) else { return }
+                    guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "截取此区域") else { return }
                     region = chosen
                 }
                 try Task.checkCancellation()
@@ -144,7 +186,7 @@ final class AppModel: ObservableObject {
                 var region: CGRect?
                 if self.useRegion && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
-                    guard let chosen = await RegionSelector.select(displayID: displayID) else { self.restoreWindows(); return }
+                    guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "录制此区域") else { self.restoreWindows(); return }
                     region = chosen
                 }
                 try await self.waitCountdown(self.recordingCountdown)
@@ -187,6 +229,7 @@ final class AppModel: ObservableObject {
     }
 
     func showDashboard() {
+        NSApp.setActivationPolicy(.regular)
         restoreWindows()
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "dashboard" || $0.title == "LumaCapture" }) {
             window.makeKeyAndOrderFront(nil)

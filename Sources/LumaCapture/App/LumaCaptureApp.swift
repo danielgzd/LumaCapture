@@ -23,7 +23,7 @@ struct LumaCaptureApp: App {
     var body: some Scene {
         Window("LumaCapture", id: "dashboard") {
             DashboardView(model: model, capture: model.capture)
-                .task { delegate.model = model; model.configureHotkeys(); await model.refresh() }
+                .task { delegate.model = model; model.configureHotkeys(); model.applyAppearance(); delegate.configureInitialPresentation(); await model.refresh() }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1060, height: 740)
@@ -43,6 +43,22 @@ struct LumaCaptureApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
+    private var configuredInitialPresentation = false
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        if UserDefaults.standard.object(forKey: "silentLaunch") == nil || UserDefaults.standard.bool(forKey: "silentLaunch") {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard UserDefaults.standard.object(forKey: "silentLaunch") == nil || UserDefaults.standard.bool(forKey: "silentLaunch") else { return }
+        DispatchQueue.main.async { NSApp.windows.forEach { $0.orderOut(nil) } }
+    }
+    func configureInitialPresentation() {
+        guard !configuredInitialPresentation else { return }
+        configuredInitialPresentation = true
+        guard model?.silentLaunch == true else { return }
+        NSApp.windows.filter { $0.title == "LumaCapture" || $0.identifier?.rawValue == "dashboard" }.forEach { $0.orderOut(nil) }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model, model.capture.isRecording || model.busy else { return .terminateNow }
@@ -75,8 +91,8 @@ struct CaptureMenu: View {
             }
             Button("停止录屏并保存") { model.stopRecording() }.disabled(model.busy)
         } else {
-            Button("区域截图    ⌘⇧2") { model.takeScreenshot(forceRegion: true) }.disabled(model.busy)
-            Button("开始录屏    ⌘⇧6") { model.startRecording() }.disabled(model.busy)
+            Button("区域截图    \(model.screenshotHotkey.displayName)") { model.takeScreenshot(forceRegion: true) }.disabled(model.busy)
+            Button("开始录屏    \(model.recordingHotkey.displayName)") { model.startRecording() }.disabled(model.busy)
         }
         if model.countdown != nil { Button("取消倒计时") { model.cancelPending() } }
         Divider()
