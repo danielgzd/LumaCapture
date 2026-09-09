@@ -47,4 +47,4 @@
 
 ## GitHub 状态
 
-GitHub CLI 已认证账号 `danielgzd`。源码、文档、CI、Universal 2 安装包和校验文件发布到私有仓库 `danielgzd/LumaCapture` 的 `v0.1.0` Release。
+GitHub CLI 已认证账号 `danielgzd`。源码、文档、CI、Universal 2 安装包和校验文件发布到公开仓库 `danielgzd/LumaCapture` 的 `v0.1.0` Release，代码采用标准 MIT License。

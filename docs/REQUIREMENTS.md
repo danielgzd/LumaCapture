@@ -75,6 +75,6 @@
 
 采用本地 ad-hoc 签名作为可构建的基线。Developer ID 签名和 Apple 公证依赖用户持有证书/开发者账户；检测到本机没有可用签名身份时，不宣称已公证。下载后的系统信任流程在 README 说明。
 
-GitHub 预检：连接器账号 danielgzd，暂无可访问仓库；gh 未登录。已请用户完成 gh 登录，默认新建私有仓库 danielgzd/LumaCapture。开发与本地验收不依赖登录。
+GitHub 发布：使用已认证账号 `danielgzd` 创建公开仓库 `danielgzd/LumaCapture`，代码采用标准 MIT License，并通过 Release 提供 Universal 2 安装包和校验文件。
 
 完成定义：每个首版需求有对应实现、自动化或实际验收证据；未验证的真实屏幕/音频/硬件场景明确标记，不把编译成功当成功能通过。
