@@ -5,6 +5,7 @@ source "$(dirname "$0")/common.sh"
 LUMA_VERSION="${VERSION:-0.1.0}"
 LUMA_BUILD_NUMBER="${BUILD_NUMBER:-1}"
 LUMA_SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+LUMA_REQUIRE_STABLE_SIGNATURE="${REQUIRE_STABLE_SIGNATURE:-0}"
 LUMA_DMG=1
 LUMA_ARCHIVE=1
 LUMA_SELF_TEST=0
@@ -31,6 +32,10 @@ if [[ ! "$LUMA_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 if [[ ! "$LUMA_BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
   echo 'BUILD_NUMBER must be an integer.' >&2
+  exit 2
+fi
+if [[ "$LUMA_REQUIRE_STABLE_SIGNATURE" == 1 && "$LUMA_SIGN_IDENTITY" == - ]]; then
+  echo 'A stable signing identity is required for release builds. Set SIGN_IDENTITY to a Developer ID Application certificate.' >&2
   exit 2
 fi
 if [[ -n "$LUMA_APP_OUTPUT" ]] && { [[ "$LUMA_APP_OUTPUT" != /*.app ]] || [[ -e "$LUMA_APP_OUTPUT" ]]; }; then
@@ -85,6 +90,9 @@ codesign "${signing_options[@]}" "$LUMA_APP"
 # rejects it, so clear that one attribute after signing as well.
 xattr -d com.apple.FinderInfo "$LUMA_APP" 2>/dev/null || true
 "$LUMA_ROOT/scripts/verify-bundle.sh" "$LUMA_APP"
+if [[ "$LUMA_REQUIRE_STABLE_SIGNATURE" == 1 ]]; then
+  REQUIRE_STABLE_SIGNATURE=1 "$LUMA_ROOT/scripts/verify-bundle.sh" "$LUMA_APP"
+fi
 if [[ "$LUMA_SELF_TEST" == 1 ]]; then
   "$LUMA_APP/Contents/MacOS/LumaCapture" --self-test "$LUMA_BUILD/self-test"
 fi

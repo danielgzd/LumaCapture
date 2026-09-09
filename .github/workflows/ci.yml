@@ -61,6 +61,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Check release signing configuration
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          [[ -n "$MACOS_CERTIFICATE" ]] || missing+=(MACOS_CERTIFICATE)
+          [[ -n "$MACOS_CERTIFICATE_PASSWORD" ]] || missing+=(MACOS_CERTIFICATE_PASSWORD)
+          [[ -n "$KEYCHAIN_PASSWORD" ]] || missing+=(KEYCHAIN_PASSWORD)
+          [[ -n "$MACOS_SIGN_IDENTITY" ]] || missing+=(MACOS_SIGN_IDENTITY)
+          [[ -n "$APPLE_TEAM_ID" ]] || missing+=(APPLE_TEAM_ID)
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Release signing secrets are missing: %s\n' "${missing[*]}" >&2
+            printf 'No version tag was created. See docs/RELEASE_SIGNING.md.\n' >&2
+            exit 1
+          fi
       - name: Choose version
         id: version
         env:

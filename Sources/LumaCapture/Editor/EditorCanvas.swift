@@ -42,9 +42,9 @@ final class EditorCanvasView: NSView {
     private var sourceRepresentation: NSImage?
     private let checkerColor: NSColor = {
         let tile = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
-            NSColor(calibratedWhite: 0.88, alpha: 1).setFill()
+            NSColor.controlBackgroundColor.setFill()
             NSRect(x: 0, y: 0, width: 24, height: 24).fill()
-            NSColor(calibratedWhite: 0.76, alpha: 1).setFill()
+            NSColor.separatorColor.withAlphaComponent(0.55).setFill()
             NSRect(x: 0, y: 0, width: 12, height: 12).fill()
             NSRect(x: 12, y: 12, width: 12, height: 12).fill()
             return true
@@ -87,7 +87,7 @@ final class EditorCanvasView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.09, alpha: 1).setFill()
+        NSColor.underPageBackgroundColor.setFill()
         dirtyRect.fill()
         guard imageFrame.width > 0 else { return }
         // Checkerboard makes transparent screenshots visible without changing exported pixels.
@@ -131,7 +131,7 @@ final class EditorCanvasView: NSView {
             context.restoreGState()
         }
         NSGraphicsContext.restoreGraphicsState()
-        NSColor.white.withAlphaComponent(0.16).setStroke()
+        NSColor.separatorColor.setStroke()
         NSBezierPath(rect: imageFrame.insetBy(dx: -0.5, dy: -0.5)).stroke()
     }
 

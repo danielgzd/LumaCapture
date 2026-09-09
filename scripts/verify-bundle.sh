@@ -11,6 +11,22 @@ test -s "$LUMA_VERIFY_APP/Contents/Resources/AppIcon.icns"
 plutil -lint "$LUMA_VERIFY_APP/Contents/Info.plist"
 lipo "$LUMA_VERIFY_BIN" -verify_arch arm64 x86_64
 codesign --verify --deep --strict --verbose=2 "$LUMA_VERIFY_APP"
+if [[ "${REQUIRE_STABLE_SIGNATURE:-0}" == 1 ]]; then
+  signature_details="$(codesign -d --verbose=4 "$LUMA_VERIFY_APP" 2>&1)"
+  if grep -q '^Signature=adhoc$' <<< "$signature_details"; then
+    echo 'Release bundle uses an ad-hoc signature; macOS permissions will not survive updates.' >&2
+    exit 1
+  fi
+  team_identifier="$(sed -n 's/^TeamIdentifier=//p' <<< "$signature_details")"
+  if [[ -z "$team_identifier" || "$team_identifier" == 'not set' ]]; then
+    echo 'Release bundle has no signing TeamIdentifier.' >&2
+    exit 1
+  fi
+  if [[ -n "${EXPECTED_TEAM_ID:-}" && "$team_identifier" != "$EXPECTED_TEAM_ID" ]]; then
+    echo "Unexpected signing TeamIdentifier: $team_identifier" >&2
+    exit 1
+  fi
+fi
 minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$LUMA_VERIFY_APP/Contents/Info.plist")"
 [[ "$minimum" == 15.0 ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$LUMA_VERIFY_APP/Contents/Info.plist")" == LumaCapture ]]

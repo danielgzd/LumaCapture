@@ -2,7 +2,12 @@ import SwiftUI
 import AppKit
 import LumaCaptureCore
 
-private let mint = Color(red: 0.50, green: 0.91, blue: 0.78)
+private let mint = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? NSColor(red: 0.50, green: 0.91, blue: 0.78, alpha: 1)
+        : NSColor(red: 0.05, green: 0.43, blue: 0.34, alpha: 1)
+})
+private let separator = Color(nsColor: .separatorColor)
 private let surface = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.105, green: 0.12, blue: 0.14, alpha: 1) : NSColor(red: 0.94, green: 0.95, blue: 0.96, alpha: 1)
 })
@@ -67,7 +72,7 @@ struct DashboardView: View {
                 Text("本地捕获 · 本地识别\n没有账户，没有上传").font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(5)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(surface, in: RoundedRectangle(cornerRadius: 14))
             HStack { Text("© Daniel · LumaCapture"); Spacer(); Text("v\(appVersion)") }.font(.system(size: 10)).foregroundStyle(.tertiary)
-        }.padding(20).frame(width: 208).background(Color.black.opacity(0.18))
+        }.padding(20).frame(width: 208).background(Color(nsColor: .underPageBackgroundColor))
     }
     private func nav(_ id: String, title: String, symbol: String) -> some View {
         Button { model.selectedTab = id } label: {
@@ -89,7 +94,7 @@ struct DashboardView: View {
             HStack(spacing: 6) { Circle().fill(model.permissionGranted ? mint : .orange).frame(width: 6, height: 6); Text(model.permissionGranted ? "准备就绪" : "需要屏幕权限").font(.system(size: 11)) }
                 .padding(.horizontal, 12).padding(.vertical, 8).background(surface, in: Capsule())
         }.padding(.horizontal, 30).padding(.top, 32).padding(.bottom, 24)
-        .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.06)).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(separator).frame(height: 1) }
     }
     private var permissionCard: some View {
         HStack(spacing: 14) {
@@ -178,7 +183,7 @@ struct DashboardView: View {
         .padding(18)
         .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
         .background(selected ? mint.opacity(0.13) : surface, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? mint : .white.opacity(0.07), lineWidth: selected ? 1.5 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? mint : separator, lineWidth: selected ? 1.5 : 1))
         .foregroundStyle(selected ? mint : .primary)
     }
     private var recordingCard: some View {
@@ -282,7 +287,7 @@ struct DashboardView: View {
     }
     private var footer: some View {
         HStack { Image(systemName: "internaldrive"); Text(model.outputDirectory.path).lineLimit(1).truncationMode(.middle); Spacer(); Text("原生 · Universal 2") }.font(.system(size: 10)).foregroundStyle(.tertiary).padding(.horizontal, 30).padding(.vertical, 12)
-            .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.06)).frame(height: 1) }
+            .overlay(alignment: .top) { Rectangle().fill(separator).frame(height: 1) }
     }
 }
 
@@ -291,7 +296,7 @@ private struct RecordThumbnail: View {
     @State private var thumbnail: NSImage?
     var body: some View {
         ZStack {
-            Color.white.opacity(0.05)
+            Color(nsColor: .controlBackgroundColor)
             if let thumbnail { Image(nsImage: thumbnail).resizable().scaledToFill() }
             else { Image(systemName: record.kind == .screenshot ? "photo" : "play.rectangle").foregroundStyle(.secondary) }
         }.task(id: record.url) {

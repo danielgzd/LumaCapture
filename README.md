@@ -25,7 +25,7 @@ LumaCapture 是一款原生 macOS 截图与录屏工具，面向 Apple Silicon �
 
 从 GitHub Releases 下载最新的 `LumaCapture-版本号-universal.dmg`，把 LumaCapture 拖到“应用程序”。也可下载 ZIP 后解压。
 
-公开构建使用 ad-hoc 本地签名，没有 Apple 公证。首次启动若 macOS 阻止打开，请先尝试打开一次，再前往“系统设置 → 隐私与安全性”，找到被阻止的 LumaCapture 并选择“仍要打开”。自行配置 Developer ID 后，构建脚本可生成 hardened runtime 签名包。
+正式 Release 使用 Developer ID Application 证书签名，并保持固定的 Bundle ID `io.github.danielgzd.LumaCapture`。覆盖安装时请把新版拖到同一个“应用程序”位置替换旧版；完成一次从旧 ad-hoc 构建到 Developer ID 构建的迁移授权后，后续小版本覆盖更新会沿用已有屏幕录制和麦克风权限。
 
 首次截图或录屏时，在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”允许 LumaCapture。只有启用麦克风录制时才会请求麦克风权限。系统可能要求退出并重新打开应用。
 
@@ -49,14 +49,14 @@ scripts/build.sh --self-test
 使用 Developer ID 签名：
 
 ```bash
-SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" scripts/build.sh
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" REQUIRE_STABLE_SIGNATURE=1 EXPECTED_TEAM_ID="TEAMID" scripts/build.sh
 ```
 
-Apple 公证需要开发者账户凭据，须在签名之后另行执行 `notarytool`；仓库不会保存证书或凭据。
+GitHub Actions Release 构建需要配置签名 secrets，步骤见 [发布签名与系统权限](docs/RELEASE_SIGNING.md)。Apple 公证需要开发者账户凭据，须在签名之后另行执行 `notarytool`；仓库不会保存证书或凭据。
 
 ## 自动版本发布
 
-合并或推送影响源代码、测试、资源、构建脚本或 Actions 配置的变更到 `main` 后，CI 会先完成测试，再把最新版本的补丁号加一，例如 `0.1.0 → 0.1.1`，创建 Git 标签并触发 Universal 2 Release 构建。文档单独修改不会产生新版本。
+合并或推送影响源代码、测试、资源、构建脚本或 Actions 配置的变更到 `main` 后，CI 会先完成测试，再把最新版本的补丁号加一，例如 `0.1.0 → 0.1.1`，创建 Git 标签并触发 Universal 2 Release 构建。Release 构建会导入 Developer ID 证书并拒绝 ad-hoc 签名；如果签名 secrets 缺失，CI 会在打标签前失败，避免产生会丢权限的安装包。文档单独修改不会产生新版本。
 
 需要发布大版本或指定版本时，在 GitHub Actions 中手动运行 **CI**，在 `release_version` 输入完整版本号，例如 `1.0.0`。版本号必须符合 `主版本.次版本.补丁版本`，且不能与已有标签重复。
 

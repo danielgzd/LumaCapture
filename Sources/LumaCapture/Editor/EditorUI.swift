@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+private let editorAccent = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? NSColor(red: 0.50, green: 0.91, blue: 0.78, alpha: 1)
+        : NSColor(red: 0.05, green: 0.43, blue: 0.34, alpha: 1)
+})
+private let selectedToolForeground = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .black : .white
+})
+
 @MainActor
 final class EditorCoordinator: NSObject, NSWindowDelegate {
     private var windows: [ObjectIdentifier: NSWindowController] = [:]
@@ -70,7 +79,7 @@ private struct EditorRootView: View {
             HStack(spacing: 14) {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 25, weight: .medium))
-                    .foregroundStyle(.mint)
+                    .foregroundStyle(editorAccent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("让重点一目了然").font(.headline)
                     Text(document.sourceURL?.lastPathComponent ?? "未命名截图")
@@ -99,7 +108,7 @@ private struct EditorRootView: View {
                     .disabled(document.isRecognizing || document.isExporting)
                 Button(action: document.copyImage) { Label("复制图像", systemImage: "doc.on.doc") }
                     .buttonStyle(.borderedProminent)
-                    .tint(.mint)
+                    .tint(editorAccent)
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(document.isRecognizing || document.isExporting)
                     .help("复制当前编辑结果（⌘⇧C；画布中也可使用 ⌘C）")
@@ -117,8 +126,9 @@ private struct EditorRootView: View {
                             Text(tool.title).font(.system(size: 10, weight: .medium))
                         }
                         .frame(width: 42, height: 46)
-                        .foregroundStyle(document.tool == tool ? Color.black : Color.primary)
-                        .background(document.tool == tool ? Color.mint : Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(document.tool == tool ? selectedToolForeground : Color.primary)
+                        .background(document.tool == tool ? editorAccent : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor), lineWidth: document.tool == tool ? 0 : 1))
                     }
                     .buttonStyle(.plain)
                     .help(tool == .redact ? "拖动添加不可逆马赛克" : tool == .crop ? "拖选区域，松开应用裁剪；可撤销" : tool.title)
@@ -131,9 +141,9 @@ private struct EditorRootView: View {
                         Button { document.color = color } label: {
                             Circle().fill(Color(nsColor: color))
                                 .frame(width: 19, height: 19)
-                                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                                .overlay(Circle().stroke(Color(nsColor: .separatorColor), lineWidth: 1))
                                 .padding(3)
-                                .overlay(Circle().stroke(document.color.isEqual(color) ? Color.mint : Color.clear, lineWidth: 2))
+                                .overlay(Circle().stroke(document.color.isEqual(color) ? editorAccent : Color.clear, lineWidth: 2))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(colorName(color))
@@ -209,7 +219,7 @@ private struct EditorRootView: View {
             EditorCanvas(document: document)
 
             HStack(spacing: 12) {
-                Image(systemName: "info.circle").foregroundStyle(.mint)
+                Image(systemName: "info.circle").foregroundStyle(editorAccent)
                 Text(document.status).lineLimit(1).truncationMode(.middle)
                 Spacer()
                 Text("\(Int(document.outputSize.width)) × \(Int(document.outputSize.height)) px")
@@ -219,7 +229,7 @@ private struct EditorRootView: View {
             .font(.caption).padding(.horizontal, 20).padding(.vertical, 11)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .tint(.mint)
+        .tint(editorAccent)
         .sheet(isPresented: $document.showsOCR) { ocrSheet }
         .sheet(isPresented: $document.showsQR) { qrSheet }
         .sheet(isPresented: $document.showsBase64) { base64Sheet }
@@ -257,7 +267,7 @@ private struct EditorRootView: View {
     private var ocrSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Image(systemName: "text.viewfinder").font(.title2).foregroundStyle(.mint)
+                Image(systemName: "text.viewfinder").font(.title2).foregroundStyle(editorAccent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("提取文字").font(.title2.bold())
                     Text("中文 / English · 识别内容只在本机处理").font(.caption).foregroundStyle(.secondary)
@@ -271,7 +281,8 @@ private struct EditorRootView: View {
             } else {
                 TextEditor(text: $document.ocrText)
                     .font(.system(size: 14)).scrollContentBackground(.hidden)
-                    .padding(10).background(Color.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 10))
+                    .padding(10).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor)))
                     .frame(minHeight: 280)
             }
             HStack {
