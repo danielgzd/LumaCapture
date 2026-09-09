@@ -44,9 +44,6 @@ struct LumaCaptureApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
     private var configuredInitialPresentation = false
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard UserDefaults.standard.object(forKey: "silentLaunch") == nil || UserDefaults.standard.bool(forKey: "silentLaunch") else { return }
         DispatchQueue.main.async { NSApp.windows.forEach { $0.orderOut(nil) } }

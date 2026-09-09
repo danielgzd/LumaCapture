@@ -4,6 +4,8 @@ LumaCapture 是适用于 macOS 15 及以上的本地截图与录屏工具。下�
 
 应用作为纯菜单栏工具运行，不显示 Dock 图标；区域/全屏截图、区域/全屏录制、导入图片及最近素材均可从菜单栏直接使用。
 
+菜单栏模式由应用包的 `LSUIElement` 声明实现，避免启动阶段动态切换应用类型造成首次启动异常或 Dock 图标残留。
+
 - ZIP：解压后将 LumaCapture.app 拖入“应用程序”。
 - DMG：打开后将 LumaCapture 拖入 Applications。
 - SHA-256：下载校验文件后，在下载目录运行 `shasum -a 256 -c LumaCapture-版本号-universal.sha256`。

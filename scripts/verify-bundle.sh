@@ -15,6 +15,7 @@ minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$LUMA_VER
 [[ "$minimum" == 15.0 ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$LUMA_VERIFY_APP/Contents/Info.plist")" == LumaCapture ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$LUMA_VERIFY_APP/Contents/Info.plist")" == io.github.danielgzd.LumaCapture ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$LUMA_VERIFY_APP/Contents/Info.plist")" == true ]]
 [[ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$LUMA_VERIFY_APP/Contents/Info.plist")" ]]
 [[ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "$LUMA_VERIFY_APP/Contents/Info.plist")" ]]
 for architecture in arm64 x86_64; do
