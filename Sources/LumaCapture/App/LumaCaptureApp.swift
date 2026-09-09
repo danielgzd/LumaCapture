@@ -30,7 +30,7 @@ struct LumaCaptureApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { Button("导入图片…") { model.importImage() }.keyboardShortcut("o") }
             CommandMenu("捕获") {
-                Button("区域截图") { model.takeScreenshot(forceRegion: true) }.disabled(model.isWorking)
+                Button("区域截图") { model.takeScreenshot(scope: .region) }.disabled(model.isWorking)
                 Button(model.capture.isRecording ? "停止录屏" : "开始录屏") {
                     model.capture.isRecording ? model.stopRecording() : model.startRecording()
                 }
@@ -45,9 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
     private var configuredInitialPresentation = false
     func applicationWillFinishLaunching(_ notification: Notification) {
-        if UserDefaults.standard.object(forKey: "silentLaunch") == nil || UserDefaults.standard.bool(forKey: "silentLaunch") {
-            NSApp.setActivationPolicy(.accessory)
-        }
+        NSApp.setActivationPolicy(.accessory)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard UserDefaults.standard.object(forKey: "silentLaunch") == nil || UserDefaults.standard.bool(forKey: "silentLaunch") else { return }
@@ -91,15 +89,26 @@ struct CaptureMenu: View {
             }
             Button("停止录屏并保存") { model.stopRecording() }.disabled(model.busy)
         } else {
-            Button("区域截图    \(model.screenshotHotkey.displayName)") { model.takeScreenshot(forceRegion: true) }.disabled(model.busy)
-            Button("开始录屏    \(model.recordingHotkey.displayName)") { model.startRecording() }.disabled(model.busy)
+            Button("区域截图    \(model.screenshotHotkey.displayName)") { model.takeScreenshot(scope: .region) }.disabled(model.busy)
+            Button("全屏截图") { model.takeScreenshot(scope: .fullDisplay) }.disabled(model.busy)
+            Divider()
+            Button("区域录屏") { model.startRecording(scope: .region) }.disabled(model.busy)
+            Button("全屏录屏") { model.startRecording(scope: .fullDisplay) }.disabled(model.busy)
         }
         if model.countdown != nil { Button("取消倒计时") { model.cancelPending() } }
         Divider()
-        Button("打开控制台") { openWindow(id: "dashboard"); model.showDashboard() }
         Button("导入图片并编辑…") { model.importImage() }
+        Menu("最近素材") {
+            if model.records.isEmpty { Text("暂无素材") }
+            else {
+                ForEach(model.records.prefix(8)) { record in
+                    Button(record.url.lastPathComponent) { model.openRecord(record) }
+                }
+            }
+        }
         Button("打开保存目录") { NSWorkspace.shared.open(model.outputDirectory) }
         Divider()
+        Button("打开控制台…") { openWindow(id: "dashboard"); model.showDashboard() }
         Button("退出 LumaCapture") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }

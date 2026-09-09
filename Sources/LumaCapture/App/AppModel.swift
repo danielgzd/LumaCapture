@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 import ServiceManagement
 import LumaCaptureCore
 
+enum QuickCaptureScope { case region, fullDisplay }
+
 @MainActor
 final class AppModel: ObservableObject {
     let capture = CaptureService()
@@ -89,7 +91,7 @@ final class AppModel: ObservableObject {
         hotkeys = nil; hotkeyError = nil
         guard hotkeysEnabled else { return }
         let instance = GlobalHotkeys()
-        instance.onScreenshot = { [weak self] in self?.takeScreenshot(forceRegion: true) }
+        instance.onScreenshot = { [weak self] in self?.takeScreenshot(scope: .region) }
         instance.onRecording = { [weak self] in
             guard let self else { return }
             if self.capture.isRecording { self.stopRecording() } else { self.startRecording() }
@@ -128,7 +130,7 @@ final class AppModel: ObservableObject {
         return candidate.range(of: "^[a-z0-9]$", options: .regularExpression) == nil ? fallback : candidate
     }
 
-    func takeScreenshot(forceRegion: Bool = false) {
+    func takeScreenshot(scope: QuickCaptureScope? = nil) {
         guard !isWorking else { return }
         busy = true; message = nil
         operationTask = Task { [weak self] in
@@ -137,12 +139,12 @@ final class AppModel: ObservableObject {
             do {
                 try self.requirePermission()
                 await self.refresh()
-                guard let target = self.target else { throw AppFailure("没有可捕获的显示器，请刷新来源。") }
+                guard let target = scope == nil ? self.target : self.capture.displays.first else { throw AppFailure("没有可捕获的显示器，请刷新来源。") }
                 self.hideWindows()
                 try await self.waitCountdown(self.captureDelay)
                 try await Task.sleep(nanoseconds: 200_000_000)
                 var region: CGRect?
-                if (self.useRegion || forceRegion) && !target.isWindow {
+                if (scope == .region || (scope == nil && self.useRegion)) && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
                     guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "截取此区域") else { return }
                     region = chosen
@@ -172,7 +174,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func startRecording() {
+    func startRecording(scope: QuickCaptureScope? = nil) {
         guard !isWorking else { return }
         busy = true; message = nil
         operationTask = Task { [weak self] in
@@ -181,10 +183,10 @@ final class AppModel: ObservableObject {
             do {
                 try self.requirePermission()
                 await self.refresh()
-                guard let target = self.target else { throw AppFailure("没有可录制的来源，请刷新来源。") }
+                guard let target = scope == nil ? self.target : self.capture.displays.first else { throw AppFailure("没有可录制的来源，请刷新来源。") }
                 self.hideWindows()
                 var region: CGRect?
-                if self.useRegion && !target.isWindow {
+                if (scope == .region || (scope == nil && self.useRegion)) && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
                     guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "录制此区域") else { self.restoreWindows(); return }
                     region = chosen
@@ -229,7 +231,6 @@ final class AppModel: ObservableObject {
     }
 
     func showDashboard() {
-        NSApp.setActivationPolicy(.regular)
         restoreWindows()
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "dashboard" || $0.title == "LumaCapture" }) {
             window.makeKeyAndOrderFront(nil)
