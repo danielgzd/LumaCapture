@@ -40,7 +40,7 @@ final class EditorCanvasView: NSView {
     private var draftPath: CGMutablePath?
     private var cachedSource: CGImage?
     private var sourceRepresentation: NSImage?
-    private var textEditor: InlineTextEditor?
+    private var textEditor: InlineTextField?
     private var textEditorSourcePoint: CGPoint?
     private let checkerColor: NSColor = {
         let tile = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
@@ -262,12 +262,12 @@ final class EditorCanvasView: NSView {
     private func beginInlineText(at sourcePoint: CGPoint, event: NSEvent) {
         cancelInlineText()
         let local = convert(event.locationInWindow, from: nil)
-        let editor = InlineTextEditor(frame: CGRect(x: local.x, y: local.y, width: 260, height: 44))
+        let editor = InlineTextField(frame: CGRect(x: local.x, y: local.y, width: 260, height: 36))
         editor.font = NSFont.systemFont(ofSize: document.fontSize, weight: document.isBold ? .bold : .regular)
         editor.textColor = document.color
         editor.onCommit = { [weak self, weak editor] in
             guard let self, let editor, let point = self.textEditorSourcePoint else { return }
-            self.document.commitText(editor.string, at: point)
+            self.document.commitText(editor.stringValue, at: point)
             self.cancelInlineText()
             self.needsDisplay = true
         }
@@ -281,7 +281,7 @@ final class EditorCanvasView: NSView {
 
     private func commitInlineTextIfNeeded() {
         guard let editor = textEditor, let point = textEditorSourcePoint else { return }
-        document.commitText(editor.string, at: point)
+        document.commitText(editor.stringValue, at: point)
         cancelInlineText()
     }
 
@@ -292,19 +292,25 @@ final class EditorCanvasView: NSView {
     }
 }
 
-private final class InlineTextEditor: NSTextView {
+private final class InlineTextField: NSTextField {
     var onCommit: (() -> Void)?
     var onCancel: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        stringValue = ""
+        placeholderString = "输入文字"
+        isEditable = true
+        isSelectable = true
+        isBordered = false
+        isBezeled = false
         drawsBackground = true
         backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.94)
-        insertionPointColor = .controlAccentColor
-        isRichText = false
-        isAutomaticQuoteSubstitutionEnabled = false
-        isAutomaticDashSubstitutionEnabled = false
-        textContainerInset = NSSize(width: 8, height: 8)
+        focusRingType = .none
+        cell?.wraps = false
+        cell?.usesSingleLineMode = true
+        cell?.lineBreakMode = .byTruncatingTail
+        alignment = .left
         wantsLayer = true
         layer?.cornerRadius = 6
         layer?.borderWidth = 1
@@ -316,8 +322,7 @@ private final class InlineTextEditor: NSTextView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onCancel?(); return }
         if event.keyCode == 36 || event.keyCode == 76 {
-            if event.modifierFlags.contains(.shift) { insertNewline(nil) }
-            else { onCommit?() }
+            onCommit?()
             return
         }
         super.keyDown(with: event)
