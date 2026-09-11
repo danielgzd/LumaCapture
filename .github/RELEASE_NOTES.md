@@ -10,6 +10,6 @@ LumaCapture 是适用于 macOS 15 及以上的本地截图与录屏工具。下�
 - DMG：打开后将 LumaCapture 拖入 Applications。
 - SHA-256：下载校验文件后，在下载目录运行 `shasum -a 256 -c LumaCapture-版本号-universal.sha256`。
 
-Release 产物要求使用 Developer ID Application 证书签名。首次从旧 ad-hoc 构建升级到正式签名构建时，macOS 可能需要重新授予屏幕录制或麦克风权限；完成一次迁移后，后续覆盖安装会沿用稳定签名身份。请先核对来源与校验值，再按 README 的系统设置流程操作。
+如果仓库配置了 Developer ID Application secrets，Release 会使用稳定签名；否则会发布 ad-hoc 测试包。ad-hoc 包没有稳定签名身份，覆盖安装后 macOS 可能需要重新授予屏幕录制或麦克风权限。请先核对来源与校验值，再按 README 的系统设置流程操作。
 
 功能范围、安装方式、测试结果及已知限制见仓库 README 和 docs/ACCEPTANCE.md。自动构建与合成媒体测试不代表所有屏幕、音频设备及 Intel 实机场景均已验证。

@@ -32,15 +32,19 @@ jobs:
         run: scripts/test.sh
       - name: Intel cross-compilation tests
         run: scripts/test.sh --arch x86_64 --portable
-      - name: Import Developer ID certificate
+      - name: Configure release signing
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [[ -z "$MACOS_CERTIFICATE" || -z "$MACOS_CERTIFICATE_PASSWORD" || -z "$KEYCHAIN_PASSWORD" ]]; then
-            echo 'Release signing secrets are missing. See docs/RELEASE_SIGNING.md.' >&2
-            exit 1
+          if [[ -z "$MACOS_CERTIFICATE" || -z "$MACOS_CERTIFICATE_PASSWORD" || -z "$KEYCHAIN_PASSWORD" || -z "$MACOS_SIGN_IDENTITY" || -z "$APPLE_TEAM_ID" ]]; then
+            echo 'Developer ID signing secrets are incomplete. Building an ad-hoc signed release; macOS permissions may need to be granted again after updates.' >&2
+            echo 'SIGN_IDENTITY=-' >> "$GITHUB_ENV"
+            echo 'REQUIRE_STABLE_SIGNATURE=0' >> "$GITHUB_ENV"
+            exit 0
           fi
           certificate_path="$RUNNER_TEMP/developer-id.p12"
           keychain_path="$RUNNER_TEMP/lumacapture-signing.keychain-db"
@@ -51,17 +55,11 @@ jobs:
           security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
           security list-keychains -d user -s "$keychain_path"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          echo "SIGN_IDENTITY=$MACOS_SIGN_IDENTITY" >> "$GITHUB_ENV"
+          echo "EXPECTED_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+          echo 'REQUIRE_STABLE_SIGNATURE=1' >> "$GITHUB_ENV"
       - name: Build and verify release archives
-        env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
-          EXPECTED_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          REQUIRE_STABLE_SIGNATURE: '1'
-        run: |
-          if [[ -z "$SIGN_IDENTITY" || -z "$EXPECTED_TEAM_ID" ]]; then
-            echo 'MACOS_SIGN_IDENTITY or APPLE_TEAM_ID is missing. See docs/RELEASE_SIGNING.md.' >&2
-            exit 1
-          fi
-          scripts/build.sh --self-test --version "$VERSION"
+        run: scripts/build.sh --self-test --version "$VERSION"
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}

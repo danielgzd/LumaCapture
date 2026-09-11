@@ -18,8 +18,8 @@ macOS 的屏幕录制、麦克风等 TCC 权限不只按应用名称或 Bundle I
 base64 -i DeveloperIDApplication.p12 | pbcopy
 ```
 
-私钥、证书文件和密码不得提交到仓库。Release 工作流会把证书导入临时钥匙串，并拒绝 ad-hoc 签名或 Team ID 不匹配的安装包。普通本地开发仍可使用默认 ad-hoc 签名。
+私钥、证书文件和密码不得提交到仓库。Release 工作流会在 secrets 完整时把证书导入临时钥匙串，并校验 Team ID；secrets 缺失时会退回 ad-hoc 测试包。普通本地开发也可使用默认 ad-hoc 签名。
 
-自动小版本发布同样依赖这些 secrets。CI 会在创建版本标签之前检查签名配置；如果缺少 secrets，会失败并且不创建新标签，避免发布会导致 TCC 权限反复丢失的安装包。Release 构建会把 GitHub Actions 的 run number 写入 `CFBundleVersion`，补丁版本仍由 tag 控制。
+自动小版本发布会在这些 secrets 完整时使用 Developer ID 签名；如果缺少 secrets，Release 会退回 ad-hoc 签名测试包。ad-hoc 包没有稳定签名身份，覆盖安装后 macOS 可能需要重新授予屏幕录制或麦克风权限。Release 构建会把 GitHub Actions 的 run number 写入 `CFBundleVersion`，补丁版本仍由 tag 控制。
 
 从 v0.1.4 及更早的 ad-hoc 版本首次升级到 Developer ID 正式签名版本时，签名身份发生变化，macOS 通常会要求用户重新授予屏幕录制和麦克风权限。这次迁移无法通过覆盖安装规避。完成一次重新授权后，只要 Bundle ID、Developer ID 团队和指定要求保持稳定，后续覆盖更新即可沿用权限。
