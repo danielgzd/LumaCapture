@@ -11,7 +11,7 @@
 | x86_64 交叉编译 | 通过 | 生成 Mach-O 64-bit x86_64 测试程序并验证架构 |
 | Universal 主程序 | 通过 | `lipo` 验证 arm64 + x86_64 |
 | 最低系统 | 通过 | 两个架构的 `LC_BUILD_VERSION minos` 均为 15.0 |
-| 包与签名 | 通过 | Info.plist、图标、运行时依赖、严格 codesign 验证；正式 Release 会拒绝 ad-hoc 签名 |
+| 包与签名 | 通过 | Info.plist、图标、运行时依赖、严格 codesign 验证；Release 有 Developer ID secrets 时稳定签名，否则退回 ad-hoc 测试包 |
 | 编辑渲染 | 通过 | 合成图像方向、裁剪、标注、马赛克不透明像素 |
 | 图像导出 | 通过 | 500 × 160 PNG/JPEG 写入并通过 ImageIO 回读 |
 | OCR 合成图检查 | 通过 | 在完整系统构建环境识别出合成英文/数字；受限沙箱内会被 Vision 拒绝，脚本明确标记为跳过 |
@@ -46,7 +46,7 @@
 
 ## 分发边界
 
-- 当前机器没有 Developer ID Application 签名身份。本地验证产物采用 ad-hoc 签名；Release 工作流现在要求导入 Developer ID 证书并校验 Team ID，避免继续发布会丢失系统权限的包。
+- 当前机器没有 Developer ID Application 签名身份。本地验证产物采用 ad-hoc 签名；Release 工作流在 secrets 完整时导入 Developer ID 证书并校验 Team ID，缺少 secrets 时退回 ad-hoc 测试包。
 - 从旧 ad-hoc 包首次迁移到 Developer ID 正式签名包时，macOS 通常仍会要求重新授权一次屏幕录制和麦克风；之后只要 Bundle ID 与签名团队稳定，覆盖安装可沿用权限。
 - x86_64 已交叉编译并检查 Mach-O 和最低系统版本；当前机器没有可用 Rosetta/Intel 执行环境，未声称 Intel 实机运行通过。
 - 真实系统声音和麦克风内容需要用户授权后人工确认；录像实现使用 ScreenCaptureKit `SCRecordingOutput`，完成回调后才把文件加入历史。
