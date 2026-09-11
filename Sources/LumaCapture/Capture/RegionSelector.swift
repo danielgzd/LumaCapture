@@ -275,7 +275,7 @@ private final class RegionSelectionView: NSView {
         confirmButtonRect = CGRect(x: barRect.maxX - 128, y: barRect.minY + 7, width: 120, height: 34)
         drawButton("取消", in: cancelButtonRect, fill: NSColor.white.withAlphaComponent(0.10), foreground: .white)
         if allowsCopy {
-            drawButton("复制到剪切板", in: copyButtonRect, fill: NSColor.white.withAlphaComponent(0.16), foreground: .white)
+            drawButton("编辑此区域", in: copyButtonRect, fill: NSColor.white.withAlphaComponent(0.16), foreground: .white)
         }
         drawButton(confirmationTitle, in: confirmButtonRect, fill: NSColor(calibratedRed: 0.50, green: 0.91, blue: 0.78, alpha: 1), foreground: .black)
     }

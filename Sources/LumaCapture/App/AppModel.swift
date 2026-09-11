@@ -28,7 +28,6 @@ final class AppModel: ObservableObject {
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var launchAtLoginError: String?
     @AppStorage("showsCursor") var showsCursor = true
-    @AppStorage("copyAfterCapture") var copyAfterCapture = true
     @AppStorage("captureDelay") var captureDelay = 0
     @AppStorage("recordingCountdown") var recordingCountdown = 3
     @AppStorage("recordingFPS") var recordingFPS = 30
@@ -143,9 +142,9 @@ final class AppModel: ObservableObject {
                 var shouldCopyOnly = false
                 if (scope == .region || (scope == nil && self.useRegion)) && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
-                    guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "截取此区域", allowsCopy: true) else { return }
+                    guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "复制到剪切板", allowsCopy: true) else { return }
                     region = chosen.rect
-                    if case .copy = chosen { shouldCopyOnly = true }
+                    if case .confirm = chosen { shouldCopyOnly = true }
                 }
                 try Task.checkCancellation()
                 let image = try await self.capture.capture(target: target, region: region, showsCursor: self.showsCursor)
@@ -166,10 +165,6 @@ final class AppModel: ObservableObject {
                     self?.addRecord(url, kind: .screenshot)
                 }
                 self.message = "截图已打开，正在后台保存原图…"
-                if self.copyAfterCapture {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.writeObjects([NSImage(cgImage: image, size: .zero)])
-                }
                 try await Task.detached(priority: .utility) {
                     try Self.writePNG(image, to: output)
                 }.value

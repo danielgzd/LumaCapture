@@ -114,7 +114,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 14) {
                 sectionTitle("开始捕获", detail: "CAPTURE")
                 HStack(spacing: 12) {
-                    workspaceCard(.screenshot, title: "截取画面", subtitle: "截图后直接标注", symbol: "camera.viewfinder", key: model.screenshotHotkey.displayName)
+                    workspaceCard(.screenshot, title: "截取画面", subtitle: "默认复制，可选编辑", symbol: "camera.viewfinder", key: model.screenshotHotkey.displayName)
                     workspaceCard(.recording, title: "录制屏幕", subtitle: "画面与声音", symbol: "record.circle", key: model.recordingHotkey.displayName)
                     Button { model.importImage() } label: {
                         workspaceCardContent(title: "导入图片", subtitle: "打开已有图片", symbol: "square.and.arrow.down", key: nil, selected: false)
@@ -235,7 +235,6 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 24) {
             settingGroup("文件与截图") {
                 HStack { Text("保存目录"); Spacer(); Text(model.outputDirectory.path).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle); Button("更改…") { model.chooseDirectory() } }
-                Toggle("截图完成后自动复制到剪贴板", isOn: $model.copyAfterCapture)
                 Picker("截图延迟", selection: $model.captureDelay) { Text("立即").tag(0); Text("3 秒").tag(3); Text("5 秒").tag(5); Text("10 秒").tag(10) }
             }
             settingGroup("录屏") {
