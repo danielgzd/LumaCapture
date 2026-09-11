@@ -140,13 +140,23 @@ final class AppModel: ObservableObject {
                 try await self.waitCountdown(self.captureDelay)
                 try await Task.sleep(nanoseconds: 200_000_000)
                 var region: CGRect?
+                var shouldCopyOnly = false
                 if (scope == .region || (scope == nil && self.useRegion)) && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
-                    guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "截取此区域") else { return }
-                    region = chosen
+                    guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "截取此区域", allowsCopy: true) else { return }
+                    region = chosen.rect
+                    if case .copy = chosen { shouldCopyOnly = true }
                 }
                 try Task.checkCancellation()
                 let image = try await self.capture.capture(target: target, region: region, showsCursor: self.showsCursor)
+                if shouldCopyOnly {
+                    self.restoreWindows()
+                    let data = try Self.pngData(image)
+                    NSPasteboard.general.clearContents()
+                    guard NSPasteboard.general.setData(data, forType: .png) else { throw AppFailure("复制失败，请稍后重试。") }
+                    self.message = "已复制截图到剪切板，\(image.width) × \(image.height) 像素"
+                    return
+                }
                 let output = try self.newOutput(kind: .screenshot, extension: "png")
                 // Present the editor as soon as ScreenCaptureKit returns. Encoding
                 // a multi-megapixel PNG happens off the main actor so a Retina
@@ -185,7 +195,7 @@ final class AppModel: ObservableObject {
                 if (scope == .region || (scope == nil && self.useRegion)) && !target.isWindow {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
                     guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "录制此区域") else { self.restoreWindows(); return }
-                    region = chosen
+                    region = chosen.rect
                 }
                 try await self.waitCountdown(self.recordingCountdown)
                 try Task.checkCancellation()
@@ -293,6 +303,13 @@ final class AppModel: ObservableObject {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { throw AppFailure("无法创建截图文件，请检查保存目录。") }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw AppFailure("截图保存失败，请检查磁盘空间及目录权限。") }
+    }
+    nonisolated static func pngData(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw AppFailure("无法准备剪切板图像。") }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw AppFailure("无法生成剪切板图像。") }
+        return data as Data
     }
 }
 

@@ -1,4 +1,6 @@
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import CoreText
 import ImageIO
 import UniformTypeIdentifiers
@@ -384,6 +386,8 @@ final class EditorDocument: ObservableObject {
     @Published var showsOCR = false
     @Published var qrResults: [String] = []
     @Published var showsQR = false
+    @Published var qrInputText = ""
+    @Published var showsQRGenerator = false
     @Published var base64Text = ""
     @Published var showsBase64 = false
     @Published var base64ModeIsDecode = false
@@ -525,6 +529,60 @@ final class EditorDocument: ObservableObject {
                 self?.status = values.isEmpty ? "未识别到二维码。" : "已识别 \(values.count) 个二维码。"
             } catch { self?.isRecognizing = false; self?.errorMessage = "二维码识别失败：\(error.localizedDescription)" }
         }
+    }
+
+    func qrPreviewImage() -> NSImage? {
+        guard let image = try? makeQRCode(text: qrInputText) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+
+    func copyGeneratedQRCode() {
+        do {
+            let image = try makeQRCode(text: qrInputText)
+            let data = try pngData(image)
+            NSPasteboard.general.clearContents()
+            guard NSPasteboard.general.setData(data, forType: .png) else { throw AppFailure("复制失败，请稍后重试。") }
+            status = "二维码已复制到剪切板。"
+        } catch { errorMessage = "二维码生成失败：\(error.localizedDescription)" }
+    }
+
+    func addGeneratedQRCodeToCanvas() {
+        do {
+            let image = try makeQRCode(text: qrInputText)
+            let crop = history.current.cropBounds
+            let maxSide = min(crop.width, crop.height) * 0.32
+            let ratio = maxSide / max(CGFloat(image.width), CGFloat(image.height))
+            let size = CGSize(width: CGFloat(image.width) * ratio, height: CGFloat(image.height) * ratio)
+            let origin = CGPoint(x: crop.midX - size.width / 2, y: crop.midY - size.height / 2)
+            commit(EditorAnnotation(tool: .image, points: [origin, CGPoint(x: origin.x + size.width, y: origin.y + size.height)],
+                                    color: .clear, width: 0, embeddedImage: image))
+            showsQRGenerator = false
+            status = "已添加二维码。"
+        } catch { errorMessage = "二维码生成失败：\(error.localizedDescription)" }
+    }
+
+    private func makeQRCode(text: String) throws -> CGImage {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, let data = value.data(using: .utf8) else { throw AppFailure("请输入要转换的文字。") }
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = data
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { throw AppFailure("无法生成二维码。") }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 14, y: 14))
+        guard let image = CIContext(options: [.useSoftwareRenderer: false]).createCGImage(scaled, from: scaled.extent) else {
+            throw AppFailure("无法渲染二维码。")
+        }
+        return image
+    }
+
+    private func pngData(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw AppFailure("无法准备 PNG 数据。")
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw AppFailure("无法生成 PNG 数据。") }
+        return data as Data
     }
 
     func encodeBase64() {

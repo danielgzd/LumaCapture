@@ -94,6 +94,7 @@ private struct EditorRootView: View {
                 Button(action: document.recognizeQR) { Label("二维码", systemImage: "qrcode.viewfinder") }
                     .disabled(document.isRecognizing || document.isExporting)
                 Menu {
+                    Button("文字转二维码") { document.qrInputText = ""; document.showsQRGenerator = true }
                     Button("图片转 Base64") { document.encodeBase64() }
                     Button("Base64 转图片") { document.base64Text = ""; document.base64ModeIsDecode = true; document.showsBase64 = true }
                 } label: { Label("转换", systemImage: "arrow.left.arrow.right") }
@@ -232,6 +233,7 @@ private struct EditorRootView: View {
         .tint(editorAccent)
         .sheet(isPresented: $document.showsOCR) { ocrSheet }
         .sheet(isPresented: $document.showsQR) { qrSheet }
+        .sheet(isPresented: $document.showsQRGenerator) { qrGeneratorSheet }
         .sheet(isPresented: $document.showsBase64) { base64Sheet }
         .alert("操作未完成", isPresented: Binding(get: { document.errorMessage != nil }, set: { if !$0 { document.errorMessage = nil } })) {
             Button("知道了") { document.errorMessage = nil }
@@ -245,6 +247,40 @@ private struct EditorRootView: View {
             else { List(document.qrResults, id: \.self) { Text($0).textSelection(.enabled) } }
             HStack { Spacer(); Button("关闭") { document.showsQR = false }; Button("全部复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(document.qrResults.joined(separator: "\n"), forType: .string) }.disabled(document.qrResults.isEmpty) }
         }.padding(24).frame(width: 600, height: 380)
+    }
+
+    private var qrGeneratorSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("文字转二维码").font(.title2.bold())
+            TextEditor(text: $document.qrInputText)
+                .font(.system(size: 14))
+                .frame(minHeight: 120)
+                .border(.secondary.opacity(0.25))
+            HStack(spacing: 16) {
+                if let image = document.qrPreviewImage(), !document.qrInputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Image(nsImage: image).interpolation(.none).resizable().scaledToFit()
+                        .frame(width: 128, height: 128)
+                        .background(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor))
+                        .frame(width: 128, height: 128)
+                        .overlay(Image(systemName: "qrcode").font(.largeTitle).foregroundStyle(.secondary))
+                }
+                Text("输入任意文字、链接或编号后，可复制二维码，或作为贴图添加到当前图片。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+            HStack {
+                Spacer()
+                Button("关闭") { document.showsQRGenerator = false }
+                Button("复制二维码") { document.copyGeneratedQRCode() }
+                    .disabled(document.qrInputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("添加到图片") { document.addGeneratedQRCodeToCanvas() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(document.qrInputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(24).frame(width: 560)
     }
 
     private var base64Sheet: some View {

@@ -4,10 +4,22 @@ import CoreGraphics
 /// Presents a borderless overlay on exactly one display and returns a rectangle
 /// in ScreenCaptureKit's display-local, top-left logical point coordinate space.
 @MainActor
+enum RegionSelectionResult {
+    case confirm(CGRect)
+    case copy(CGRect)
+
+    var rect: CGRect {
+        switch self {
+        case .confirm(let rect), .copy(let rect): rect
+        }
+    }
+}
+
+@MainActor
 enum RegionSelector {
     private static var active: RegionSelectionController?
 
-    static func select(displayID: CGDirectDisplayID, confirmationTitle: String = "使用此区域") async -> CGRect? {
+    static func select(displayID: CGDirectDisplayID, confirmationTitle: String = "使用此区域", allowsCopy: Bool = false) async -> RegionSelectionResult? {
         active?.cancel()
         guard !Task.isCancelled else { return nil }
         guard let screen = NSScreen.screens.first(where: { $0.captureDisplayID == displayID }) else { return nil }
@@ -21,6 +33,7 @@ enum RegionSelector {
                 }
                 active = controller
                 controller.confirmationTitle = confirmationTitle
+                controller.allowsCopy = allowsCopy
                 controller.present()
             }
         } onCancel: {
@@ -35,13 +48,16 @@ enum RegionSelector {
 private final class RegionSelectionController {
     let id: UUID
     private let screen: NSScreen
-    private let completion: (CGRect?) -> Void
+    private let completion: (RegionSelectionResult?) -> Void
     private var hasCompleted = false
     private var keyMonitor: Any?
     private var screenObserver: NSObjectProtocol?
     private var deactivateObserver: NSObjectProtocol?
     var confirmationTitle = "使用此区域" {
         didSet { (window.contentView as? RegionSelectionView)?.confirmationTitle = confirmationTitle }
+    }
+    var allowsCopy = false {
+        didSet { (window.contentView as? RegionSelectionView)?.allowsCopy = allowsCopy }
     }
     private lazy var window: RegionSelectionWindow = {
         let window = RegionSelectionWindow(contentRect: screen.frame,
@@ -56,12 +72,13 @@ private final class RegionSelectionController {
         window.ignoresMouseEvents = false
         let view = RegionSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
         view.confirmationTitle = confirmationTitle
-        view.onComplete = { [weak self] rect in self?.finish(rect) }
+        view.allowsCopy = allowsCopy
+        view.onComplete = { [weak self] action in self?.finish(action) }
         window.contentView = view
         return window
     }()
 
-    init(id: UUID, screen: NSScreen, completion: @escaping (CGRect?) -> Void) {
+    init(id: UUID, screen: NSScreen, completion: @escaping (RegionSelectionResult?) -> Void) {
         self.id = id
         self.screen = screen
         self.completion = completion
@@ -93,7 +110,7 @@ private final class RegionSelectionController {
 
     func cancel() { finish(nil) }
 
-    private func finish(_ windowLocalRect: CGRect?) {
+    private func finish(_ action: RegionSelectionView.Action?) {
         guard !hasCompleted else { return }
         hasCompleted = true
         window.orderOut(nil)
@@ -102,11 +119,18 @@ private final class RegionSelectionController {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
         if let deactivateObserver { NotificationCenter.default.removeObserver(deactivateObserver); self.deactivateObserver = nil }
         NSCursor.pop()
-        if let rect = windowLocalRect?.standardized,
-           rect.width >= CaptureGeometry.minimumRegionSize,
-           rect.height >= CaptureGeometry.minimumRegionSize {
-            let topLeft = CaptureGeometry.topLeftRegion(fromBottomLeft: rect, displayHeight: screen.frame.height)
-            completion(topLeft)
+        if let action {
+           let rect = action.rect.standardized
+           guard rect.width >= CaptureGeometry.minimumRegionSize,
+                 rect.height >= CaptureGeometry.minimumRegionSize else {
+               completion(nil)
+               return
+           }
+           let topLeft = CaptureGeometry.topLeftRegion(fromBottomLeft: rect, displayHeight: screen.frame.height)
+           switch action {
+           case .confirm: completion(.confirm(topLeft))
+           case .copy: completion(.copy(topLeft))
+           }
         } else {
             completion(nil)
         }
@@ -119,11 +143,24 @@ private final class RegionSelectionWindow: NSWindow {
 }
 
 private final class RegionSelectionView: NSView {
-    var onComplete: ((CGRect?) -> Void)?
+    enum Action {
+        case confirm(CGRect)
+        case copy(CGRect)
+
+        var rect: CGRect {
+            switch self {
+            case .confirm(let rect), .copy(let rect): rect
+            }
+        }
+    }
+
+    var onComplete: ((Action?) -> Void)?
     var confirmationTitle = "使用此区域"
+    var allowsCopy = false
     private var start: CGPoint?
     private var selection: CGRect?
     private var confirmButtonRect: CGRect = .zero
+    private var copyButtonRect: CGRect = .zero
     private var cancelButtonRect: CGRect = .zero
 
     override var acceptsFirstResponder: Bool { true }
@@ -158,6 +195,7 @@ private final class RegionSelectionView: NSView {
             drawActionBar(for: selection)
         } else {
             confirmButtonRect = .zero
+            copyButtonRect = .zero
             cancelButtonRect = .zero
             let hint = "拖动选择区域  ·  回车确认  ·  Esc 取消"
             let attributes: [NSAttributedString.Key: Any] = [
@@ -173,7 +211,11 @@ private final class RegionSelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if confirmButtonRect.contains(point), let selection {
-            onComplete?(selection)
+            onComplete?(.confirm(selection))
+            return
+        }
+        if copyButtonRect.contains(point), let selection {
+            onComplete?(.copy(selection))
             return
         }
         if cancelButtonRect.contains(point) {
@@ -210,7 +252,7 @@ private final class RegionSelectionView: NSView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onComplete?(nil) }
         else if event.keyCode == 36 || event.keyCode == 76 {
-            if let selection { onComplete?(selection) }
+            if let selection { onComplete?(.confirm(selection)) }
         }
         else { super.keyDown(with: event) }
     }
@@ -218,7 +260,7 @@ private final class RegionSelectionView: NSView {
     override func rightMouseDown(with event: NSEvent) { onComplete?(nil) }
 
     private func drawActionBar(for selection: CGRect) {
-        let barSize = CGSize(width: 220, height: 48)
+        let barSize = CGSize(width: allowsCopy ? 346 : 220, height: 48)
         let preferredX = selection.midX - barSize.width / 2
         let x = min(max(12, preferredX), max(12, bounds.maxX - barSize.width - 12))
         let below = selection.minY - barSize.height - 12
@@ -229,8 +271,12 @@ private final class RegionSelectionView: NSView {
         NSBezierPath(roundedRect: barRect, xRadius: 12, yRadius: 12).fill()
 
         cancelButtonRect = CGRect(x: barRect.minX + 8, y: barRect.minY + 7, width: 76, height: 34)
+        copyButtonRect = allowsCopy ? CGRect(x: cancelButtonRect.maxX + 8, y: barRect.minY + 7, width: 116, height: 34) : .zero
         confirmButtonRect = CGRect(x: barRect.maxX - 128, y: barRect.minY + 7, width: 120, height: 34)
         drawButton("取消", in: cancelButtonRect, fill: NSColor.white.withAlphaComponent(0.10), foreground: .white)
+        if allowsCopy {
+            drawButton("复制到剪切板", in: copyButtonRect, fill: NSColor.white.withAlphaComponent(0.16), foreground: .white)
+        }
         drawButton(confirmationTitle, in: confirmButtonRect, fill: NSColor(calibratedRed: 0.50, green: 0.91, blue: 0.78, alpha: 1), foreground: .black)
     }
 
