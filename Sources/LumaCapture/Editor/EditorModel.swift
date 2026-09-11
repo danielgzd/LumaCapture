@@ -90,13 +90,14 @@ struct EditorHistory {
 }
 
 enum EditorError: LocalizedError {
-    case renderFailed, exportFailed, invalidCrop, selfCheck(String)
+    case renderFailed, exportFailed, invalidCrop, selfCheck(String), message(String)
     var errorDescription: String? {
         switch self {
         case .renderFailed: return "无法生成编辑图像。请尝试关闭其他大型图像后重试。"
         case .exportFailed: return "无法保存图像。请检查目标目录的写入权限和可用磁盘空间。"
         case .invalidCrop: return "裁剪区域至少需要 2 × 2 像素。"
         case .selfCheck(let reason): return "编辑器自检失败：\(reason)"
+        case .message(let value): return value
         }
     }
 }
@@ -541,7 +542,7 @@ final class EditorDocument: ObservableObject {
             let image = try makeQRCode(text: qrInputText)
             let data = try pngData(image)
             NSPasteboard.general.clearContents()
-            guard NSPasteboard.general.setData(data, forType: .png) else { throw AppFailure("复制失败，请稍后重试。") }
+            guard NSPasteboard.general.setData(data, forType: .png) else { throw EditorError.message("复制失败，请稍后重试。") }
             status = "二维码已复制到剪切板。"
         } catch { errorMessage = "二维码生成失败：\(error.localizedDescription)" }
     }
@@ -563,14 +564,14 @@ final class EditorDocument: ObservableObject {
 
     private func makeQRCode(text: String) throws -> CGImage {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, let data = value.data(using: .utf8) else { throw AppFailure("请输入要转换的文字。") }
+        guard !value.isEmpty, let data = value.data(using: .utf8) else { throw EditorError.message("请输入要转换的文字。") }
         let filter = CIFilter.qrCodeGenerator()
         filter.message = data
         filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { throw AppFailure("无法生成二维码。") }
+        guard let output = filter.outputImage else { throw EditorError.message("无法生成二维码。") }
         let scaled = output.transformed(by: CGAffineTransform(scaleX: 14, y: 14))
         guard let image = CIContext(options: [.useSoftwareRenderer: false]).createCGImage(scaled, from: scaled.extent) else {
-            throw AppFailure("无法渲染二维码。")
+            throw EditorError.message("无法渲染二维码。")
         }
         return image
     }
@@ -578,10 +579,10 @@ final class EditorDocument: ObservableObject {
     private func pngData(_ image: CGImage) throws -> Data {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
-            throw AppFailure("无法准备 PNG 数据。")
+            throw EditorError.message("无法准备 PNG 数据。")
         }
         CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { throw AppFailure("无法生成 PNG 数据。") }
+        guard CGImageDestinationFinalize(destination) else { throw EditorError.message("无法生成 PNG 数据。") }
         return data as Data
     }
 
