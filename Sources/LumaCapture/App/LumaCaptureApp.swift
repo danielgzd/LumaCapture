@@ -18,15 +18,18 @@ struct LumaCaptureApp: App {
                 exit(0)
             } catch { fputs("SELF_TEST_FAILED: \(error)\n", stderr); exit(1) }
         }
-        _model = StateObject(wrappedValue: AppModel())
+        let appModel = AppModel()
+        AppDelegate.bootstrapModel = appModel
+        _model = StateObject(wrappedValue: appModel)
     }
     var body: some Scene {
         Window("LumaCapture", id: "dashboard") {
             DashboardView(model: model, capture: model.capture)
-                .task { delegate.model = model; model.configureHotkeys(); model.applyAppearance(); delegate.configureInitialPresentation(); await model.refresh() }
+                .task { delegate.model = model; model.configureHotkeys(); model.applyAppearance(); await model.refresh() }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1060, height: 740)
+        .defaultLaunchBehavior(model.silentLaunch ? .suppressed : .presented)
         .commands {
             CommandGroup(replacing: .newItem) { Button("导入图片…") { model.importImage() }.keyboardShortcut("o") }
             CommandMenu("捕获") {
@@ -42,17 +45,14 @@ struct LumaCaptureApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static weak var bootstrapModel: AppModel?
     weak var model: AppModel?
-    private var configuredInitialPresentation = false
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard UserDefaults.standard.object(forKey: "silentLaunch") == nil || UserDefaults.standard.bool(forKey: "silentLaunch") else { return }
-        DispatchQueue.main.async { NSApp.windows.forEach { $0.orderOut(nil) } }
-    }
-    func configureInitialPresentation() {
-        guard !configuredInitialPresentation else { return }
-        configuredInitialPresentation = true
-        guard model?.silentLaunch == true else { return }
-        NSApp.windows.filter { $0.title == "LumaCapture" || $0.identifier?.rawValue == "dashboard" }.forEach { $0.orderOut(nil) }
+        let appModel = model ?? Self.bootstrapModel
+        model = appModel
+        appModel?.configureHotkeys()
+        appModel?.applyAppearance()
+        Task { await appModel?.refresh() }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

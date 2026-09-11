@@ -233,18 +233,9 @@ private struct EditorRootView: View {
         .sheet(isPresented: $document.showsOCR) { ocrSheet }
         .sheet(isPresented: $document.showsQR) { qrSheet }
         .sheet(isPresented: $document.showsBase64) { base64Sheet }
-        .sheet(isPresented: $document.showsTextEntry) { textEntrySheet }
         .alert("操作未完成", isPresented: Binding(get: { document.errorMessage != nil }, set: { if !$0 { document.errorMessage = nil } })) {
             Button("知道了") { document.errorMessage = nil }
         } message: { Text(document.errorMessage ?? "") }
-    }
-
-    private var textEntrySheet: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("添加文字").font(.title2.bold())
-            TextField("输入文字", text: $document.text, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1...5)
-            HStack { Spacer(); Button("取消") { document.showsTextEntry = false; document.pendingTextPoint = nil }; Button("添加") { document.commitPendingText() }.buttonStyle(.borderedProminent).disabled(document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-        }.padding(24).frame(width: 460)
     }
 
     private var qrSheet: some View {

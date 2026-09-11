@@ -445,6 +445,14 @@ final class EditorDocument: ObservableObject {
         pendingTextPoint = point; text = ""; showsTextEntry = true
     }
 
+    func commitText(_ value: String, at point: CGPoint) {
+        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { status = "文字已取消。"; return }
+        commit(EditorAnnotation(tool: .text, points: [point], color: color, width: strokeWidth,
+                                text: cleaned, fontSize: fontSize, isBold: isBold))
+        text = ""; pendingTextPoint = nil; showsTextEntry = false
+    }
+
     func commitPendingText() {
         guard let point = pendingTextPoint else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)

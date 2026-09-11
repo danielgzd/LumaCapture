@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
@@ -35,12 +36,12 @@ final class AppModel: ObservableObject {
     @AppStorage("microphone") var microphone = false
     @AppStorage("maximumDuration") var maximumDuration = 0
     @AppStorage("hotkeysEnabled") var hotkeysEnabled = true
-    @AppStorage("screenshotHotkeyKey") var screenshotHotkeyKey = "2"
-    @AppStorage("recordingHotkeyKey") var recordingHotkeyKey = "6"
-    @AppStorage("hotkeyUsesCommand") var hotkeyUsesCommand = true
-    @AppStorage("hotkeyUsesShift") var hotkeyUsesShift = true
-    @AppStorage("hotkeyUsesOption") var hotkeyUsesOption = false
-    @AppStorage("hotkeyUsesControl") var hotkeyUsesControl = false
+    @AppStorage("screenshotHotkeyCode") var screenshotHotkeyCode = kVK_ANSI_2
+    @AppStorage("screenshotHotkeyModifiers") var screenshotHotkeyModifiers = cmdKey | shiftKey
+    @AppStorage("screenshotHotkeyDisplay") var screenshotHotkeyDisplay = "⇧⌘2"
+    @AppStorage("recordingHotkeyCode") var recordingHotkeyCode = kVK_ANSI_6
+    @AppStorage("recordingHotkeyModifiers") var recordingHotkeyModifiers = cmdKey | shiftKey
+    @AppStorage("recordingHotkeyDisplay") var recordingHotkeyDisplay = "⇧⌘6"
     @AppStorage("silentLaunch") var silentLaunch = true
     @AppStorage("appearanceMode") var appearanceMode = "system"
     private let repository: HistoryRepository
@@ -99,8 +100,14 @@ final class AppModel: ObservableObject {
         do { try instance.register(screenshot: screenshotHotkey, recording: recordingHotkey); hotkeys = instance } catch { hotkeyError = error.localizedDescription }
     }
 
-    var screenshotHotkey: HotkeyConfiguration { hotkey(key: screenshotHotkeyKey) }
-    var recordingHotkey: HotkeyConfiguration { hotkey(key: recordingHotkeyKey) }
+    var screenshotHotkey: HotkeyConfiguration {
+        HotkeyConfiguration(keyCode: screenshotHotkeyCode, carbonModifiers: screenshotHotkeyModifiers,
+                            displayName: screenshotHotkeyDisplay, fallback: .defaultScreenshot)
+    }
+    var recordingHotkey: HotkeyConfiguration {
+        HotkeyConfiguration(keyCode: recordingHotkeyCode, carbonModifiers: recordingHotkeyModifiers,
+                            displayName: recordingHotkeyDisplay, fallback: .defaultRecording)
+    }
     var preferredColorScheme: ColorScheme? { appearanceMode == "light" ? .light : appearanceMode == "dark" ? .dark : nil }
 
     func applyAppearance() {
@@ -108,8 +115,6 @@ final class AppModel: ObservableObject {
     }
 
     func normalizeAndConfigureHotkeys() {
-        screenshotHotkeyKey = normalizedHotkeyKey(screenshotHotkeyKey, fallback: "2")
-        recordingHotkeyKey = normalizedHotkeyKey(recordingHotkeyKey, fallback: "6")
         configureHotkeys()
     }
 
@@ -119,15 +124,6 @@ final class AppModel: ObservableObject {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch { launchAtLoginError = "无法更新开机自启：\(error.localizedDescription)" }
         launchAtLogin = SMAppService.mainApp.status == .enabled
-    }
-
-    private func hotkey(key: String) -> HotkeyConfiguration {
-        HotkeyConfiguration(key: key, command: hotkeyUsesCommand, shift: hotkeyUsesShift, option: hotkeyUsesOption, control: hotkeyUsesControl)
-    }
-
-    private func normalizedHotkeyKey(_ value: String, fallback: String) -> String {
-        let candidate = String(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().prefix(1))
-        return candidate.range(of: "^[a-z0-9]$", options: .regularExpression) == nil ? fallback : candidate
     }
 
     func takeScreenshot(scope: QuickCaptureScope? = nil) {

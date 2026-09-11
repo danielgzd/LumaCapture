@@ -1,18 +1,22 @@
 import SwiftUI
 import AppKit
+import Carbon
 import LumaCaptureCore
 
 private let mint = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         ? NSColor(red: 0.50, green: 0.91, blue: 0.78, alpha: 1)
-        : NSColor(red: 0.05, green: 0.43, blue: 0.34, alpha: 1)
+        : NSColor(red: 0.086, green: 0.467, blue: 1.0, alpha: 1)
 })
 private let separator = Color(nsColor: .separatorColor)
 private let surface = Color(nsColor: NSColor(name: nil) { appearance in
-    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.105, green: 0.12, blue: 0.14, alpha: 1) : NSColor(red: 0.94, green: 0.95, blue: 0.96, alpha: 1)
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.105, green: 0.12, blue: 0.14, alpha: 1) : .white
 })
 private let canvas = Color(nsColor: NSColor(name: nil) { appearance in
-    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.065, green: 0.077, blue: 0.09, alpha: 1) : NSColor(red: 0.98, green: 0.985, blue: 0.99, alpha: 1)
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.065, green: 0.077, blue: 0.09, alpha: 1) : NSColor(red: 0.961, green: 0.961, blue: 0.961, alpha: 1)
+})
+private let selectedFill = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(red: 0.50, green: 0.91, blue: 0.78, alpha: 0.13) : NSColor(red: 0.902, green: 0.957, blue: 1.0, alpha: 1)
 })
 private let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"
 
@@ -72,15 +76,15 @@ struct DashboardView: View {
                 Text("本地捕获 · 本地识别\n没有账户，没有上传").font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(5)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(surface, in: RoundedRectangle(cornerRadius: 14))
             HStack { Text("© Daniel · LumaCapture"); Spacer(); Text("v\(appVersion)") }.font(.system(size: 10)).foregroundStyle(.tertiary)
-        }.padding(20).frame(width: 208).background(Color(nsColor: .underPageBackgroundColor))
+        }.padding(20).frame(width: 208).background(surface)
     }
     private func nav(_ id: String, title: String, symbol: String) -> some View {
         Button { model.selectedTab = id } label: {
             HStack(spacing: 12) { Image(systemName: symbol).frame(width: 20); Text(title); Spacer(); if id == "library" { Text("\(model.records.count)").font(.caption).foregroundStyle(.secondary) } }
                 .font(.system(size: 13, weight: .medium)).padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 46)
-                .background(model.selectedTab == id ? mint.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
+                .background(model.selectedTab == id ? selectedFill : .clear, in: RoundedRectangle(cornerRadius: 10))
                 .foregroundStyle(model.selectedTab == id ? mint : .secondary)
-        }.buttonStyle(.plain)
+        }.buttonStyle(.plain).frame(maxWidth: .infinity)
     }
     private var header: some View {
         HStack {
@@ -182,7 +186,7 @@ struct DashboardView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-        .background(selected ? mint.opacity(0.13) : surface, in: RoundedRectangle(cornerRadius: 16))
+        .background(selected ? selectedFill : surface, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? mint : separator, lineWidth: selected ? 1.5 : 1))
         .foregroundStyle(selected ? mint : .primary)
     }
@@ -241,19 +245,8 @@ struct DashboardView: View {
             }
             settingGroup("快捷键与权限") {
                 Toggle("启用全局快捷键", isOn: $model.hotkeysEnabled).onChange(of: model.hotkeysEnabled) { _, _ in model.configureHotkeys() }
-                shortcutRow("区域截图", key: $model.screenshotHotkeyKey)
-                shortcutRow("开始 / 停止录屏", key: $model.recordingHotkeyKey)
-                HStack(spacing: 15) {
-                    Text("组合键"); Spacer()
-                    Toggle("⌘", isOn: $model.hotkeyUsesCommand)
-                    Toggle("⇧", isOn: $model.hotkeyUsesShift)
-                    Toggle("⌥", isOn: $model.hotkeyUsesOption)
-                    Toggle("⌃", isOn: $model.hotkeyUsesControl)
-                }.toggleStyle(.checkbox)
-                .onChange(of: model.hotkeyUsesCommand) { _, _ in model.normalizeAndConfigureHotkeys() }
-                .onChange(of: model.hotkeyUsesShift) { _, _ in model.normalizeAndConfigureHotkeys() }
-                .onChange(of: model.hotkeyUsesOption) { _, _ in model.normalizeAndConfigureHotkeys() }
-                .onChange(of: model.hotkeyUsesControl) { _, _ in model.normalizeAndConfigureHotkeys() }
+                shortcutRow("区域截图", code: $model.screenshotHotkeyCode, modifiers: $model.screenshotHotkeyModifiers, display: $model.screenshotHotkeyDisplay)
+                shortcutRow("开始 / 停止录屏", code: $model.recordingHotkeyCode, modifiers: $model.recordingHotkeyModifiers, display: $model.recordingHotkeyDisplay)
                 if let error = model.hotkeyError { Text(error).font(.caption).foregroundStyle(.orange) }
                 HStack { Button("屏幕录制权限") { CapturePermissions.openScreenRecordingSettings() }; Button("麦克风权限") { CapturePermissions.openMicrophoneSettings() } }
             }
@@ -271,15 +264,11 @@ struct DashboardView: View {
     private func settingGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 17) { Text(title).font(.system(size: 15, weight: .semibold)); Divider(); content().font(.system(size: 12)) }.padding(22).background(surface, in: RoundedRectangle(cornerRadius: 16))
     }
-    private func shortcutRow(_ title: String, key: Binding<String>) -> some View {
+    private func shortcutRow(_ title: String, code: Binding<Int>, modifiers: Binding<Int>, display: Binding<String>) -> some View {
         HStack {
             Text(title); Spacer()
-            TextField("字母或数字", text: key).multilineTextAlignment(.center).monospaced().frame(width: 90)
-                .onSubmit { model.normalizeAndConfigureHotkeys() }
-                .onChange(of: key.wrappedValue) { _, newValue in
-                    if newValue.count > 1 { key.wrappedValue = String(newValue.suffix(1)) }
-                    model.normalizeAndConfigureHotkeys()
-                }
+            ShortcutRecorderField(keyCode: code, modifiers: modifiers, displayName: display) { model.configureHotkeys() }
+                .frame(width: 180, height: 32)
         }
     }
     private func sectionTitle(_ title: String, detail: String) -> some View {
@@ -289,6 +278,95 @@ struct DashboardView: View {
         HStack { Image(systemName: "internaldrive"); Text(model.outputDirectory.path).lineLimit(1).truncationMode(.middle); Spacer(); Text("原生 · Universal 2") }.font(.system(size: 10)).foregroundStyle(.tertiary).padding(.horizontal, 30).padding(.vertical, 12)
             .overlay(alignment: .top) { Rectangle().fill(separator).frame(height: 1) }
     }
+}
+
+private struct ShortcutRecorderField: NSViewRepresentable {
+    @Binding var keyCode: Int
+    @Binding var modifiers: Int
+    @Binding var displayName: String
+    let onChange: () -> Void
+
+    func makeNSView(context: Context) -> ShortcutRecorderView {
+        let view = ShortcutRecorderView()
+        view.onShortcut = { keyCode, modifiers, displayName in
+            self.keyCode = keyCode
+            self.modifiers = modifiers
+            self.displayName = displayName
+            self.onChange()
+        }
+        return view
+    }
+
+    func updateNSView(_ view: ShortcutRecorderView, context: Context) {
+        view.displayName = displayName
+    }
+}
+
+private final class ShortcutRecorderView: NSView {
+    var onShortcut: ((Int, Int, String) -> Void)?
+    var displayName = "" { didSet { needsDisplay = true } }
+    private var isRecording = false { didSet { needsDisplay = true } }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        toolTip = "点击后直接按下新的快捷键"
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func mouseDown(with event: NSEvent) {
+        isRecording = true
+        window?.makeFirstResponder(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard event.keyCode != 53 else { isRecording = false; return }
+        let carbon = carbonModifiers(from: event.modifierFlags)
+        let name = shortcutDisplayName(keyCode: Int(event.keyCode), carbonModifiers: carbon, event: event)
+        onShortcut?(Int(event.keyCode), carbon, name)
+        isRecording = false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7)
+        (isRecording ? NSColor.controlAccentColor.withAlphaComponent(0.12) : NSColor.textBackgroundColor).setFill()
+        path.fill()
+        (isRecording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+        path.lineWidth = isRecording ? 1.5 : 1
+        path.stroke()
+        let text = isRecording ? "按下快捷键…" : displayName
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: isRecording ? NSColor.controlAccentColor : NSColor.labelColor
+        ]
+        let size = text.size(withAttributes: attributes)
+        text.draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2), withAttributes: attributes)
+    }
+}
+
+private func carbonModifiers(from flags: NSEvent.ModifierFlags) -> Int {
+    var result = 0
+    if flags.contains(.command) { result |= cmdKey }
+    if flags.contains(.shift) { result |= shiftKey }
+    if flags.contains(.option) { result |= optionKey }
+    if flags.contains(.control) { result |= controlKey }
+    return result
+}
+
+private func shortcutDisplayName(keyCode: Int, carbonModifiers: Int, event: NSEvent) -> String {
+    let keyNames: [Int: String] = [
+        kVK_Return: "↩", kVK_Tab: "⇥", kVK_Space: "Space", kVK_Delete: "⌫", kVK_Escape: "Esc",
+        kVK_ForwardDelete: "⌦", kVK_Home: "Home", kVK_End: "End", kVK_PageUp: "Page Up",
+        kVK_PageDown: "Page Down", kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
+        kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5", kVK_F6: "F6",
+        kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12"
+    ]
+    let key = keyNames[keyCode] ?? event.charactersIgnoringModifiers?.uppercased() ?? "\(keyCode)"
+    return "\(carbonModifiers & controlKey != 0 ? "⌃" : "")\(carbonModifiers & optionKey != 0 ? "⌥" : "")\(carbonModifiers & shiftKey != 0 ? "⇧" : "")\(carbonModifiers & cmdKey != 0 ? "⌘" : "")\(key)"
 }
 
 private struct RecordThumbnail: View {

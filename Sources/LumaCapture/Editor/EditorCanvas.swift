@@ -40,6 +40,8 @@ final class EditorCanvasView: NSView {
     private var draftPath: CGMutablePath?
     private var cachedSource: CGImage?
     private var sourceRepresentation: NSImage?
+    private var textEditor: InlineTextEditor?
+    private var textEditorSourcePoint: CGPoint?
     private let checkerColor: NSColor = {
         let tile = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
             NSColor.controlBackgroundColor.setFill()
@@ -169,13 +171,14 @@ final class EditorCanvasView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        commitInlineTextIfNeeded()
         guard let start = point(for: event, clamp: false) else { return }
         guard let tool = document.tool else { return }
         var annotation = EditorAnnotation(tool: tool, points: [start], color: document.color,
                                           width: document.strokeWidth, text: document.text, fontSize: document.fontSize,
                                           isBold: document.isBold, cornerRadius: document.rectangleCornerRadius)
         if tool == .text {
-            document.requestText(at: start)
+            beginInlineText(at: start, event: event)
         } else if tool == .image {
             document.status = "请点击工具栏中的“导入贴图”。"
         } else {
@@ -241,6 +244,7 @@ final class EditorCanvasView: NSView {
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
+            cancelInlineText()
             draft = nil
             draftPath = nil
             document.status = "已取消当前绘制。"
@@ -253,5 +257,69 @@ final class EditorCanvasView: NSView {
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    private func beginInlineText(at sourcePoint: CGPoint, event: NSEvent) {
+        cancelInlineText()
+        let local = convert(event.locationInWindow, from: nil)
+        let editor = InlineTextEditor(frame: CGRect(x: local.x, y: local.y, width: 260, height: 44))
+        editor.font = NSFont.systemFont(ofSize: document.fontSize, weight: document.isBold ? .bold : .regular)
+        editor.textColor = document.color
+        editor.onCommit = { [weak self, weak editor] in
+            guard let self, let editor, let point = self.textEditorSourcePoint else { return }
+            self.document.commitText(editor.string, at: point)
+            self.cancelInlineText()
+            self.needsDisplay = true
+        }
+        editor.onCancel = { [weak self] in self?.cancelInlineText() }
+        addSubview(editor)
+        textEditor = editor
+        textEditorSourcePoint = sourcePoint
+        window?.makeFirstResponder(editor)
+        document.status = "输入文字后按 Enter 添加，Esc 取消。"
+    }
+
+    private func commitInlineTextIfNeeded() {
+        guard let editor = textEditor, let point = textEditorSourcePoint else { return }
+        document.commitText(editor.string, at: point)
+        cancelInlineText()
+    }
+
+    private func cancelInlineText() {
+        textEditor?.removeFromSuperview()
+        textEditor = nil
+        textEditorSourcePoint = nil
+    }
+}
+
+private final class InlineTextEditor: NSTextView {
+    var onCommit: (() -> Void)?
+    var onCancel: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = true
+        backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.94)
+        insertionPointColor = .controlAccentColor
+        isRichText = false
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+        textContainerInset = NSSize(width: 8, height: 8)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.controlAccentColor.cgColor
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onCancel?(); return }
+        if event.keyCode == 36 || event.keyCode == 76 {
+            if event.modifierFlags.contains(.shift) { insertNewline(nil) }
+            else { onCommit?() }
+            return
+        }
+        super.keyDown(with: event)
     }
 }
