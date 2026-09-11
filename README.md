@@ -1,8 +1,52 @@
 # LumaCapture
 
+<p align="center">
+  <strong>原生、轻量、离线优先的 macOS 截图与录屏工具</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/danielgzd/LumaCapture/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/danielgzd/LumaCapture?style=for-the-badge&label=Release&color=1677ff"></a>
+  <a href="https://github.com/danielgzd/LumaCapture/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/danielgzd/LumaCapture/ci.yml?branch=main&style=for-the-badge&label=CI&color=52c41a"></a>
+  <a href="https://github.com/danielgzd/LumaCapture/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/danielgzd/LumaCapture/total?style=for-the-badge&label=Downloads&color=722ed1"></a>
+  <a href="https://github.com/danielgzd/LumaCapture/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/danielgzd/LumaCapture?style=for-the-badge&label=Stars&color=faad14"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/danielgzd/LumaCapture?style=for-the-badge&label=License&color=13c2c2"></a>
+</p>
+
+<p align="center">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-15%2B-111827?style=flat-square&logo=apple">
+  <img alt="Universal 2" src="https://img.shields.io/badge/Universal%202-arm64%20%7C%20x86__64-1677ff?style=flat-square">
+  <img alt="Swift" src="https://img.shields.io/badge/Swift-6-FA7343?style=flat-square&logo=swift&logoColor=white">
+  <img alt="Forks" src="https://img.shields.io/github/forks/danielgzd/LumaCapture?style=flat-square&label=forks">
+  <img alt="Commits" src="https://img.shields.io/github/commit-activity/m/danielgzd/LumaCapture?style=flat-square&label=commits%2Fmonth">
+  <img alt="Last commit" src="https://img.shields.io/github/last-commit/danielgzd/LumaCapture?style=flat-square&label=last%20commit">
+  <img alt="Visitors" src="https://api.visitorbadge.io/api/visitors?path=danielgzd%2FLumaCapture&label=visitors&labelColor=%23f5f5f5&countColor=%231677ff&style=flat-square">
+</p>
+
+<p align="center">
+  <a href="https://github.com/danielgzd/LumaCapture/releases/latest">下载最新版</a>
+  ·
+  <a href="docs/REQUIREMENTS.md">需求文档</a>
+  ·
+  <a href="docs/ACCEPTANCE.md">验收记录</a>
+  ·
+  <a href="docs/RELEASE_SIGNING.md">发布签名</a>
+</p>
+
 LumaCapture 是一款原生 macOS 截图与录屏工具，面向 Apple Silicon 和 Intel Mac。它把区域/窗口/显示器捕获、标注、OCR、置顶贴图、录屏和本地历史记录放进一个简洁的工作台。所有图像与文字识别都在本机完成。
 
 最低支持 macOS 15.0，发布包为 Universal 2（`arm64` + `x86_64`）；最新版本见 GitHub Releases。
+
+## 项目看板
+
+| 指标 | 实时状态 |
+| --- | --- |
+| 最新版本 | ![Latest release](https://img.shields.io/github/v/release/danielgzd/LumaCapture?label=release&color=1677ff) |
+| 总下载量 | ![Downloads](https://img.shields.io/github/downloads/danielgzd/LumaCapture/total?label=downloads&color=722ed1) |
+| Star / Fork | ![Stars](https://img.shields.io/github/stars/danielgzd/LumaCapture?label=stars&color=faad14) ![Forks](https://img.shields.io/github/forks/danielgzd/LumaCapture?label=forks) |
+| 构建状态 | ![CI](https://img.shields.io/github/actions/workflow/status/danielgzd/LumaCapture/ci.yml?branch=main&label=CI&color=52c41a) |
+| 提交活跃 | ![Commit activity](https://img.shields.io/github/commit-activity/m/danielgzd/LumaCapture?label=commits%2Fmonth) |
+| 最近提交 | ![Last commit](https://img.shields.io/github/last-commit/danielgzd/LumaCapture?label=last%20commit) |
+| 访问统计 | ![Visitors](https://api.visitorbadge.io/api/visitors?path=danielgzd%2FLumaCapture&label=visitors&labelColor=%23f5f5f5&countColor=%231677ff) |
 
 ## 功能
 
