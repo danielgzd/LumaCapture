@@ -3,16 +3,21 @@ import CoreGraphics
 
 /// Presents a borderless overlay on exactly one display and returns a rectangle
 /// in ScreenCaptureKit's display-local, top-left logical point coordinate space.
-@MainActor
-enum RegionSelectionResult {
-    case confirm(CGRect)
-    case copy(CGRect)
+enum RegionSelectionDestination: Equatable {
+    case useRegion
+    case editor
+    case pasteboard
 
-    var rect: CGRect {
-        switch self {
-        case .confirm(let rect), .copy(let rect): rect
-        }
+    static func primary(allowsCopy: Bool) -> Self {
+        allowsCopy ? .pasteboard : .useRegion
     }
+}
+
+struct RegionSelectionResult {
+    let rect: CGRect
+    let destination: RegionSelectionDestination
+
+    var copiesToPasteboard: Bool { destination == .pasteboard }
 }
 
 @MainActor
@@ -127,10 +132,7 @@ private final class RegionSelectionController {
                return
            }
            let topLeft = CaptureGeometry.topLeftRegion(fromBottomLeft: rect, displayHeight: screen.frame.height)
-           switch action {
-           case .confirm: completion(.confirm(topLeft))
-           case .copy: completion(.copy(topLeft))
-           }
+           completion(RegionSelectionResult(rect: topLeft, destination: action.destination))
         } else {
             completion(nil)
         }
@@ -143,15 +145,9 @@ private final class RegionSelectionWindow: NSWindow {
 }
 
 private final class RegionSelectionView: NSView {
-    enum Action {
-        case confirm(CGRect)
-        case copy(CGRect)
-
-        var rect: CGRect {
-            switch self {
-            case .confirm(let rect), .copy(let rect): rect
-            }
-        }
+    struct Action {
+        let rect: CGRect
+        let destination: RegionSelectionDestination
     }
 
     var onComplete: ((Action?) -> Void)?
@@ -160,7 +156,7 @@ private final class RegionSelectionView: NSView {
     private var start: CGPoint?
     private var selection: CGRect?
     private var confirmButtonRect: CGRect = .zero
-    private var copyButtonRect: CGRect = .zero
+    private var editButtonRect: CGRect = .zero
     private var cancelButtonRect: CGRect = .zero
 
     override var acceptsFirstResponder: Bool { true }
@@ -195,7 +191,7 @@ private final class RegionSelectionView: NSView {
             drawActionBar(for: selection)
         } else {
             confirmButtonRect = .zero
-            copyButtonRect = .zero
+            editButtonRect = .zero
             cancelButtonRect = .zero
             let hint = "拖动选择区域  ·  回车确认  ·  Esc 取消"
             let attributes: [NSAttributedString.Key: Any] = [
@@ -211,11 +207,11 @@ private final class RegionSelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if confirmButtonRect.contains(point), let selection {
-            onComplete?(.confirm(selection))
+            onComplete?(Action(rect: selection, destination: .primary(allowsCopy: allowsCopy)))
             return
         }
-        if copyButtonRect.contains(point), let selection {
-            onComplete?(.copy(selection))
+        if editButtonRect.contains(point), let selection {
+            onComplete?(Action(rect: selection, destination: .editor))
             return
         }
         if cancelButtonRect.contains(point) {
@@ -252,7 +248,9 @@ private final class RegionSelectionView: NSView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onComplete?(nil) }
         else if event.keyCode == 36 || event.keyCode == 76 {
-            if let selection { onComplete?(.confirm(selection)) }
+            if let selection {
+                onComplete?(Action(rect: selection, destination: .primary(allowsCopy: allowsCopy)))
+            }
         }
         else { super.keyDown(with: event) }
     }
@@ -271,11 +269,11 @@ private final class RegionSelectionView: NSView {
         NSBezierPath(roundedRect: barRect, xRadius: 12, yRadius: 12).fill()
 
         cancelButtonRect = CGRect(x: barRect.minX + 8, y: barRect.minY + 7, width: 76, height: 34)
-        copyButtonRect = allowsCopy ? CGRect(x: cancelButtonRect.maxX + 8, y: barRect.minY + 7, width: 116, height: 34) : .zero
+        editButtonRect = allowsCopy ? CGRect(x: cancelButtonRect.maxX + 8, y: barRect.minY + 7, width: 116, height: 34) : .zero
         confirmButtonRect = CGRect(x: barRect.maxX - 128, y: barRect.minY + 7, width: 120, height: 34)
         drawButton("取消", in: cancelButtonRect, fill: NSColor.white.withAlphaComponent(0.10), foreground: .white)
         if allowsCopy {
-            drawButton("编辑此区域", in: copyButtonRect, fill: NSColor.white.withAlphaComponent(0.16), foreground: .white)
+            drawButton("编辑此区域", in: editButtonRect, fill: NSColor.white.withAlphaComponent(0.16), foreground: .white)
         }
         drawButton(confirmationTitle, in: confirmButtonRect, fill: NSColor(calibratedRed: 0.50, green: 0.91, blue: 0.78, alpha: 1), foreground: .black)
     }

@@ -23,9 +23,20 @@ enum CaptureSelfCheck {
               video.width <= 4096, video.height <= 2160 else {
             throw CaptureError.invalidRegion
         }
+        let selection = CGRect(x: 20, y: 30, width: 320, height: 180)
+        let copyResult = RegionSelectionResult(
+            rect: selection,
+            destination: .primary(allowsCopy: true))
+        let editResult = RegionSelectionResult(rect: selection, destination: .editor)
+        guard copyResult.copiesToPasteboard,
+              !editResult.copiesToPasteboard,
+              RegionSelectionDestination.primary(allowsCopy: false) == .useRegion else {
+            throw CaptureError.invalidRegion
+        }
         return [
             "PASS capture geometry clipping and reverse dragging",
             "PASS Retina screenshot sizing and H.264 dimension constraints",
+            "PASS region copy action routes to pasteboard without opening editor",
             "SKIP real ScreenCaptureKit capture (requires interactive user permission)"
         ]
     }

@@ -144,7 +144,7 @@ final class AppModel: ObservableObject {
                     guard let displayID = target.displayID else { throw AppFailure("无法读取显示器信息。") }
                     guard let chosen = await RegionSelector.select(displayID: displayID, confirmationTitle: "复制到剪切板", allowsCopy: true) else { return }
                     region = chosen.rect
-                    if case .confirm = chosen { shouldCopyOnly = true }
+                    shouldCopyOnly = chosen.copiesToPasteboard
                 }
                 try Task.checkCancellation()
                 let image = try await self.capture.capture(target: target, region: region, showsCursor: self.showsCursor)
