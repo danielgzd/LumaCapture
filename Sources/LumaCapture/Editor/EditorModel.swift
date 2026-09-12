@@ -447,7 +447,10 @@ final class EditorDocument: ObservableObject {
     }
 
     func requestText(at point: CGPoint) {
-        pendingTextPoint = point; text = ""; showsTextEntry = true
+        pendingTextPoint = point
+        text = ""
+        showsTextEntry = true
+        status = "请输入文字；添加后会放在刚才点击的位置。"
     }
 
     func commitText(_ value: String, at point: CGPoint) {
@@ -461,10 +464,17 @@ final class EditorDocument: ObservableObject {
     func commitPendingText() {
         guard let point = pendingTextPoint else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { showsTextEntry = false; pendingTextPoint = nil; return }
+        guard !value.isEmpty else { cancelPendingText(); return }
         commit(EditorAnnotation(tool: .text, points: [point], color: color, width: strokeWidth,
                                 text: value, fontSize: fontSize, isBold: isBold))
         showsTextEntry = false; pendingTextPoint = nil; text = ""
+    }
+
+    func cancelPendingText() {
+        text = ""
+        pendingTextPoint = nil
+        showsTextEntry = false
+        status = "文字已取消。"
     }
 
     func importSticker(window: NSWindow?) {

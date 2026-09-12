@@ -32,7 +32,7 @@ final class EditorScrollView: NSScrollView {
 }
 
 @MainActor
-final class EditorCanvasView: NSView {
+final class EditorCanvasView: NSView, NSTextFieldDelegate {
     var document: EditorDocument
     private var draft: EditorAnnotation?
     private var scale: CGFloat = 1
@@ -40,8 +40,7 @@ final class EditorCanvasView: NSView {
     private var draftPath: CGMutablePath?
     private var cachedSource: CGImage?
     private var sourceRepresentation: NSImage?
-    private var textEditor: InlineTextField?
-    private var textEditorSourcePoint: CGPoint?
+    private var textEditor: NSTextField?
     private let checkerColor: NSColor = {
         let tile = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
             NSColor.controlBackgroundColor.setFill()
@@ -178,7 +177,7 @@ final class EditorCanvasView: NSView {
                                           width: document.strokeWidth, text: document.text, fontSize: document.fontSize,
                                           isBold: document.isBold, cornerRadius: document.rectangleCornerRadius)
         if tool == .text {
-            beginInlineText(at: start, event: event)
+            beginTextEntry(at: start, localPoint: convert(event.locationInWindow, from: nil))
         } else if tool == .image {
             document.status = "请点击工具栏中的“导入贴图”。"
         } else {
@@ -259,72 +258,71 @@ final class EditorCanvasView: NSView {
         }
     }
 
-    private func beginInlineText(at sourcePoint: CGPoint, event: NSEvent) {
+    func beginTextEntry(at sourcePoint: CGPoint, localPoint: CGPoint) {
         cancelInlineText()
-        let local = convert(event.locationInWindow, from: nil)
-        let editor = InlineTextField(frame: CGRect(x: local.x, y: local.y, width: 260, height: 36))
+        document.requestText(at: sourcePoint)
+        let height = max(36, document.fontSize * 1.45)
+        let availableWidth = max(120, imageFrame.maxX - localPoint.x - 8)
+        let editor = NSTextField(frame: CGRect(x: localPoint.x, y: localPoint.y,
+                                               width: min(360, availableWidth), height: height))
+        editor.stringValue = ""
+        editor.placeholderString = "输入文字"
         editor.font = NSFont.systemFont(ofSize: document.fontSize, weight: document.isBold ? .bold : .regular)
         editor.textColor = document.color
-        editor.onCommit = { [weak self, weak editor] in
-            guard let self, let editor, let point = self.textEditorSourcePoint else { return }
-            self.document.commitText(editor.stringValue, at: point)
-            self.cancelInlineText()
-            self.needsDisplay = true
-        }
-        editor.onCancel = { [weak self] in self?.cancelInlineText() }
+        editor.isEditable = true
+        editor.isSelectable = true
+        editor.isBordered = false
+        editor.isBezeled = false
+        editor.drawsBackground = true
+        editor.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.94)
+        editor.focusRingType = .none
+        editor.cell?.wraps = false
+        editor.cell?.usesSingleLineMode = true
+        editor.cell?.lineBreakMode = .byTruncatingTail
+        editor.alignment = .left
+        editor.wantsLayer = true
+        editor.layer?.cornerRadius = 6
+        editor.layer?.borderWidth = 1
+        editor.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        editor.delegate = self
         addSubview(editor)
         textEditor = editor
-        textEditorSourcePoint = sourcePoint
         window?.makeFirstResponder(editor)
-        document.status = "输入文字后按 Enter 添加，Esc 取消。"
+        document.status = "直接输入文字，按 Enter 添加，Esc 取消。"
     }
 
     private func commitInlineTextIfNeeded() {
-        guard let editor = textEditor, let point = textEditorSourcePoint else { return }
-        document.commitText(editor.stringValue, at: point)
-        cancelInlineText()
+        guard let editor = textEditor else { return }
+        document.text = editor.stringValue
+        document.commitPendingText()
+        removeInlineTextField()
+        needsDisplay = true
     }
 
     private func cancelInlineText() {
+        guard textEditor != nil || document.pendingTextPoint != nil else { return }
+        document.cancelPendingText()
+        removeInlineTextField()
+    }
+
+    private func removeInlineTextField() {
+        textEditor?.delegate = nil
         textEditor?.removeFromSuperview()
         textEditor = nil
-        textEditorSourcePoint = nil
-    }
-}
-
-private final class InlineTextField: NSTextField {
-    var onCommit: (() -> Void)?
-    var onCancel: (() -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        stringValue = ""
-        placeholderString = "输入文字"
-        isEditable = true
-        isSelectable = true
-        isBordered = false
-        isBezeled = false
-        drawsBackground = true
-        backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.94)
-        focusRingType = .none
-        cell?.wraps = false
-        cell?.usesSingleLineMode = true
-        cell?.lineBreakMode = .byTruncatingTail
-        alignment = .left
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.controlAccentColor.cgColor
+        window?.makeFirstResponder(self)
     }
 
-    required init?(coder: NSCoder) { nil }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onCancel?(); return }
-        if event.keyCode == 36 || event.keyCode == 76 {
-            onCommit?()
-            return
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelInlineText()
+            return true
         }
-        super.keyDown(with: event)
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) ||
+            commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+            commitInlineTextIfNeeded()
+            return true
+        }
+        return false
     }
+
 }

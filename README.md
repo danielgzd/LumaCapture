@@ -73,6 +73,8 @@ Release 在配置 Developer ID Application secrets 时会使用稳定签名；�
 
 首次截图或录屏时，在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”允许 LumaCapture。只有启用麦克风录制时才会请求麦克风权限。系统可能要求退出并重新打开应用。
 
+遇到闪退时，可按[闪退日志获取说明](docs/CRASH_LOGS.md)找到最新的 `.ips` 报告和运行日志。
+
 ## 从源码构建
 
 需要 macOS、Xcode 16 或更高版本。脚本不会修改全局 `xcode-select`，也没有第三方依赖。

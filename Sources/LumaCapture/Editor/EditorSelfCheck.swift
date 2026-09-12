@@ -3,6 +3,7 @@ import CoreGraphics
 import ImageIO
 
 enum EditorSelfCheck {
+    @MainActor
     static func run(outputDirectory: URL) throws -> [String] {
         let orientationSource = try makeOrientationImage()
         let full = try EditorRenderer.render(
@@ -40,6 +41,44 @@ enum EditorSelfCheck {
         context.setFillColor(NSColor.white.cgColor)
         context.fill(CGRect(origin: .zero, size: size))
         guard let source = context.makeImage() else { throw EditorError.selfCheck("无法生成合成图像") }
+
+        // Exercise the actual canvas path that previously crashed: click the
+        // text tool, construct its field editor, enter text and press Return.
+        let textDocument = EditorDocument(image: source, sourceURL: nil, onExport: { _ in })
+        let insertionPoint = CGPoint(x: 84, y: 72)
+        textDocument.tool = .text
+        let canvas = EditorCanvasView(document: textDocument)
+        canvas.updateLayout(viewport: NSSize(width: 640, height: 300))
+        canvas.beginTextEntry(at: insertionPoint, localPoint: CGPoint(x: 144, y: 132))
+        guard textDocument.showsTextEntry,
+              textDocument.pendingTextPoint == insertionPoint,
+              let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
+            throw EditorError.selfCheck("点击画布后未显示原位文字输入框")
+        }
+        field.stringValue = "文字输入自测"
+        _ = canvas.control(field, textView: NSTextView(),
+                           doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        guard !textDocument.showsTextEntry,
+              textDocument.pendingTextPoint == nil,
+              canvas.subviews.compactMap({ $0 as? NSTextField }).isEmpty,
+              textDocument.history.current.annotations.last?.tool == .text,
+              textDocument.history.current.annotations.last?.text == "文字输入自测",
+              textDocument.history.current.annotations.last?.points.first == insertionPoint else {
+            throw EditorError.selfCheck("文字输入提交状态不正确")
+        }
+        let annotationCount = textDocument.history.current.annotations.count
+        canvas.beginTextEntry(at: CGPoint(x: 120, y: 90), localPoint: CGPoint(x: 180, y: 150))
+        guard let cancelField = canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
+            throw EditorError.selfCheck("再次输入时未显示原位文字输入框")
+        }
+        _ = canvas.control(cancelField, textView: NSTextView(),
+                           doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+        guard !textDocument.showsTextEntry,
+              textDocument.pendingTextPoint == nil,
+              textDocument.history.current.annotations.count == annotationCount,
+              canvas.subviews.compactMap({ $0 as? NSTextField }).isEmpty else {
+            throw EditorError.selfCheck("Esc 未正确取消文字输入")
+        }
 
         var snapshot = EditorSnapshot(cropBounds: CGRect(x: 10, y: 10, width: 500, height: 160))
         snapshot.annotations = [
@@ -82,6 +121,7 @@ enum EditorSelfCheck {
             "PASS source orientation and top-left crop pixel fidelity",
             "PASS image rotation, scaling and true mosaic downsampling",
             "PASS editor crop, annotation and mosaic rendering",
+            "PASS text tool canvas click, inline field input and commit workflow",
             "PASS PNG and JPEG export/readback at source pixel dimensions"
         ]
         do {
