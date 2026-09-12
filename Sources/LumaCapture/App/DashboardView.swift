@@ -251,7 +251,7 @@ struct DashboardView: View {
             }
             settingGroup("启动与外观") {
                 Toggle("登录 Mac 时自动启动", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
-                Toggle("启动时静默驻留菜单栏", isOn: $model.silentLaunch)
+                Toggle("启动时不自动打开工作台", isOn: $model.silentLaunch)
                 Picker("界面风格", selection: $model.appearanceMode) {
                     Text("跟随系统").tag("system"); Text("亮色").tag("light"); Text("暗黑").tag("dark")
                 }.onChange(of: model.appearanceMode) { _, _ in model.applyAppearance() }
